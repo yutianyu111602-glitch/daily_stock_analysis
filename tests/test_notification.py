@@ -362,6 +362,52 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
         self.assertIn("- 当前价/MA5/MA10/MA20：17.83 / 17.28 / 16.91 / 16.62", out)
 
     @mock.patch("src.notification.get_config")
+    def test_generate_dashboard_report_conservative_style_rewrites_signal_language(
+        self, mock_get_config: mock.MagicMock
+    ):
+        mock_get_config.return_value = _make_config(
+            report_renderer_enabled=False,
+            report_language="zh",
+            report_decision_style="conservative",
+        )
+        service = NotificationService()
+        result = AnalysisResult(
+            code="300490",
+            name="华自科技",
+            sentiment_score=75,
+            trend_prediction="看多",
+            operation_advice="买入",
+            analysis_summary="建议回踩确认后再考虑参与。",
+            decision_type="buy",
+            dashboard={
+                "core_conclusion": {
+                    "one_sentence": "建议回踩确认后再考虑参与。",
+                    "position_advice": {
+                        "no_position": "仅回踩确认后小仓试错，不追高。",
+                        "has_position": "保留底仓，跌破止损位先减仓。",
+                    },
+                },
+                "intelligence": {
+                    "risk_alerts": ["短线涨幅偏大，追高性价比一般。"],
+                },
+                "battle_plan": {
+                    "sniper_points": {
+                        "ideal_buy": "17.50",
+                        "secondary_buy": "17.20",
+                        "stop_loss": "16.90",
+                        "take_profit": "18.60",
+                    }
+                },
+            },
+        )
+
+        out = service.generate_dashboard_report([result], report_date="2026-04-13")
+
+        self.assertIn("可小仓试错", out)
+        self.assertIn("适合：有纪律的低吸型空仓者", out)
+        self.assertIn("不适合：追高入场", out)
+
+    @mock.patch("src.notification.get_config")
     def test_generate_single_stock_report_localizes_english_fallback(self, mock_get_config: mock.MagicMock):
         mock_get_config.return_value = _make_config(report_renderer_enabled=False, report_language="en")
         service = NotificationService()

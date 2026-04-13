@@ -7,6 +7,7 @@ import re
 from typing import Any, Dict, Optional
 
 SUPPORTED_REPORT_LANGUAGES = ("zh", "en")
+SUPPORTED_DECISION_STYLES = ("standard", "conservative")
 
 _REPORT_LANGUAGE_ALIASES = {
     "zh-cn": "zh",
@@ -487,6 +488,114 @@ def infer_decision_type_from_advice(value: Any, default: str = "hold") -> str:
     if canonical in {"hold", "watch"}:
         return "hold"
     return default
+
+
+def normalize_decision_style(value: Optional[str], default: str = "standard") -> str:
+    """Normalize report decision style to a supported short code."""
+    candidate = str(value or default).strip().lower().replace("-", "_")
+    return candidate if candidate in SUPPORTED_DECISION_STYLES else default
+
+
+def localize_decision_display_advice(
+    value: Any,
+    language: Optional[str],
+    style: Optional[str] = None,
+) -> str:
+    """Return style-aware operation advice for end-user report display."""
+    normalized_language = normalize_report_language(language)
+    normalized_style = normalize_decision_style(style)
+    canonical = _canonicalize_lookup_value(value, _OPERATION_ADVICE_CANONICAL_MAP)
+    if normalized_style != "conservative":
+        return localize_operation_advice(value, normalized_language)
+
+    conservative_translations = {
+        "strong_buy": {"zh": "回踩确认后再考虑参与", "en": "Wait for pullback confirmation"},
+        "buy": {"zh": "可小仓试错", "en": "Small pilot position only"},
+        "hold": {"zh": "持仓观察", "en": "Hold and observe"},
+        "watch": {"zh": "继续观察", "en": "Keep watching"},
+        "reduce": {"zh": "逢高减仓", "en": "Trim into strength"},
+        "sell": {"zh": "先控风险", "en": "Risk control first"},
+        "strong_sell": {"zh": "先控风险", "en": "Risk control first"},
+    }
+    if canonical in conservative_translations:
+        return conservative_translations[canonical][normalized_language]
+    return localize_operation_advice(value, normalized_language)
+
+
+def localize_decision_display_trend(
+    value: Any,
+    language: Optional[str],
+    style: Optional[str] = None,
+) -> str:
+    """Return style-aware trend wording for end-user report display."""
+    normalized_language = normalize_report_language(language)
+    normalized_style = normalize_decision_style(style)
+    canonical = _canonicalize_lookup_value(value, _TREND_PREDICTION_CANONICAL_MAP)
+    if normalized_style != "conservative":
+        return localize_trend_prediction(value, normalized_language)
+
+    conservative_translations = {
+        "strong_bullish": {"zh": "偏强但不宜激进", "en": "Strong but avoid aggression"},
+        "bullish": {"zh": "偏强但需确认", "en": "Constructive but needs confirmation"},
+        "sideways": {"zh": "震荡等待确认", "en": "Sideways, wait for confirmation"},
+        "bearish": {"zh": "转弱需防守", "en": "Weakening, stay defensive"},
+        "strong_bearish": {"zh": "弱势防守", "en": "Weak, stay defensive"},
+    }
+    if canonical in conservative_translations:
+        return conservative_translations[canonical][normalized_language]
+    return localize_trend_prediction(value, normalized_language)
+
+
+def get_investor_fit_lines(
+    value: Any,
+    language: Optional[str],
+    style: Optional[str] = None,
+) -> tuple[str, str]:
+    """Return investor-fit guidance lines for the current advice style."""
+    normalized_language = normalize_report_language(language)
+    normalized_style = normalize_decision_style(style)
+    canonical = _canonicalize_lookup_value(value, _OPERATION_ADVICE_CANONICAL_MAP)
+    if normalized_style != "conservative":
+        if normalized_language == "en":
+            return ("Suitable: existing position holders", "Avoid: impulsive chasing")
+        return ("适合：已有持仓者继续跟踪", "不适合：情绪化追涨")
+
+    conservative_fit = {
+        "strong_buy": {
+            "zh": ("适合：有纪律的回踩确认型投资者", "不适合：追高入场"),
+            "en": ("Suitable: disciplined pullback buyers", "Avoid: chasing breakouts"),
+        },
+        "buy": {
+            "zh": ("适合：有纪律的低吸型空仓者", "不适合：追高入场"),
+            "en": ("Suitable: disciplined dip buyers", "Avoid: chasing strength"),
+        },
+        "hold": {
+            "zh": ("适合：已有底仓者继续观察", "不适合：空仓急于开新仓"),
+            "en": ("Suitable: investors with an existing position", "Avoid: rushed new entries"),
+        },
+        "watch": {
+            "zh": ("适合：空仓耐心等待者", "不适合：想立刻出手的人"),
+            "en": ("Suitable: patient observers", "Avoid: traders needing instant action"),
+        },
+        "reduce": {
+            "zh": ("适合：已有持仓者做仓位优化", "不适合：逆势补仓"),
+            "en": ("Suitable: holders managing exposure", "Avoid: averaging down blindly"),
+        },
+        "sell": {
+            "zh": ("适合：持仓者优先做风控", "不适合：逆势抄底"),
+            "en": ("Suitable: holders prioritizing risk control", "Avoid: bottom fishing against weakness"),
+        },
+        "strong_sell": {
+            "zh": ("适合：持仓者优先做风控", "不适合：逆势抄底"),
+            "en": ("Suitable: holders prioritizing risk control", "Avoid: bottom fishing against weakness"),
+        },
+    }
+    if canonical in conservative_fit:
+        return conservative_fit[canonical][normalized_language]
+
+    if normalized_language == "en":
+        return ("Suitable: existing position holders", "Avoid: impulsive chasing")
+    return ("适合：已有持仓者继续跟踪", "不适合：情绪化追涨")
 
 
 def get_signal_level(advice: Any, score: Any, language: Optional[str]) -> tuple[str, str, str]:

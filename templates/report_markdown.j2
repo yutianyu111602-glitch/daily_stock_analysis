@@ -6,7 +6,7 @@
 ## 📊 {{ labels.summary_heading }}
 
 {% for e in enriched %}
-{{ e.signal_emoji }} **{{ e.stock_name }}({{ e.result.code }})**: {{ e.localized_operation_advice }} · {{ labels.score_label }} {{ e.result.sentiment_score }} · {{ e.localized_trend_prediction }}
+{{ e.signal_emoji }} **{{ e.stock_name }}({{ e.result.code }})**: {{ e.display_operation_advice }} · {{ labels.score_label }} {{ e.result.sentiment_score }} · {{ e.display_trend_prediction }}
 {% endfor %}
 
 ---
@@ -53,7 +53,7 @@
 
 ### 📌 {{ labels.core_conclusion_heading }}
 
-**{{ e.signal_emoji }} {{ e.signal_text }}** · {{ localize_trend_prediction(result.trend_prediction, report_language) }}
+**{{ e.signal_emoji }} {{ display_operation_advice(result.operation_advice) }}** · {{ display_trend_prediction(result.trend_prediction) }}
 
 > **{{ labels.one_sentence_label }}**: {{ core.get('one_sentence', result.analysis_summary) }}
 
@@ -63,6 +63,9 @@
 {% if pos_advice %}
 - 🆕 {{ labels.no_position_label }}：{{ pos_advice.get('no_position', localize_operation_advice(result.operation_advice, report_language)) }}
 - 💼 {{ labels.has_position_label }}：{{ pos_advice.get('has_position', labels.continue_holding) }}
+{% set fit = investor_fit_lines(result.operation_advice) %}
+- {{ fit[0] }}
+- {{ fit[1] }}
 {% endif %}
 
 {{ market_snapshot(result) }}

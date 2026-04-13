@@ -16,12 +16,16 @@ from typing import Any, Dict, List, Optional
 from src.analyzer import AnalysisResult
 from src.config import get_config
 from src.report_language import (
+    get_investor_fit_lines,
     get_localized_stock_name,
     get_report_labels,
     get_signal_level,
+    localize_decision_display_advice,
+    localize_decision_display_trend,
     localize_chip_health,
     localize_operation_advice,
     localize_trend_prediction,
+    normalize_decision_style,
     normalize_report_language,
 )
 
@@ -111,6 +115,10 @@ def render(
         )
         or getattr(get_config(), "report_language", "zh")
     )
+    report_decision_style = normalize_decision_style(
+        (extra_context or {}).get("report_decision_style")
+        or getattr(get_config(), "report_decision_style", "standard")
+    )
     labels = get_report_labels(report_language)
 
     # Build template context with pre-computed signal levels (sorted by score)
@@ -126,6 +134,15 @@ def render(
             "stock_name": _escape_md(rn),
             "localized_operation_advice": localize_operation_advice(r.operation_advice, report_language),
             "localized_trend_prediction": localize_trend_prediction(r.trend_prediction, report_language),
+            "display_operation_advice": localize_decision_display_advice(
+                r.operation_advice, report_language, report_decision_style
+            ),
+            "display_trend_prediction": localize_decision_display_trend(
+                r.trend_prediction, report_language, report_decision_style
+            ),
+            "investor_fit": get_investor_fit_lines(
+                r.operation_advice, report_language, report_decision_style
+            ),
         })
 
     buy_count = sum(1 for r in results if getattr(r, "decision_type", "") == "buy")
@@ -148,12 +165,22 @@ def render(
         "hold_count": hold_count,
         "labels": labels,
         "report_language": report_language,
+        "report_decision_style": report_decision_style,
         "escape_md": _escape_md,
         "clean_sniper": _clean_sniper_value,
         "failed_checks": failed_checks,
         "history_by_code": {},
         "localize_operation_advice": localize_operation_advice,
         "localize_trend_prediction": localize_trend_prediction,
+        "display_operation_advice": lambda value: localize_decision_display_advice(
+            value, report_language, report_decision_style
+        ),
+        "display_trend_prediction": lambda value: localize_decision_display_trend(
+            value, report_language, report_decision_style
+        ),
+        "investor_fit_lines": lambda value: get_investor_fit_lines(
+            value, report_language, report_decision_style
+        ),
         "localize_chip_health": localize_chip_health,
     }
     if extra_context:

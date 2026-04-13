@@ -23,12 +23,16 @@ from src.config import get_config
 from src.analyzer import AnalysisResult
 from src.enums import ReportType
 from src.report_language import (
+    get_investor_fit_lines,
     get_localized_stock_name,
     get_report_labels,
     get_signal_level,
     localize_chip_health,
+    localize_decision_display_advice,
+    localize_decision_display_trend,
     localize_operation_advice,
     localize_trend_prediction,
+    normalize_decision_style,
     normalize_report_language,
 )
 from bot.models import BotMessage
@@ -194,6 +198,30 @@ class NotificationService(
 
     def _get_labels(self, payload: Optional[Any] = None) -> Dict[str, str]:
         return get_report_labels(self._get_report_language(payload))
+
+    def _get_report_decision_style(self) -> str:
+        return normalize_decision_style(getattr(get_config(), "report_decision_style", "standard"))
+
+    def _display_operation_advice(self, value: Any, language: Optional[str]) -> str:
+        return localize_decision_display_advice(
+            value,
+            language,
+            self._get_report_decision_style(),
+        )
+
+    def _display_trend_prediction(self, value: Any, language: Optional[str]) -> str:
+        return localize_decision_display_trend(
+            value,
+            language,
+            self._get_report_decision_style(),
+        )
+
+    def _investor_fit_lines(self, value: Any, language: Optional[str]) -> Tuple[str, str]:
+        return get_investor_fit_lines(
+            value,
+            language,
+            self._get_report_decision_style(),
+        )
 
     def _get_display_name(self, result: AnalysisResult, language: Optional[str] = None) -> str:
         report_language = normalize_report_language(language or self._get_report_language(result))
@@ -587,9 +615,9 @@ class NotificationService(
                 _, emoji, _ = self._get_signal_level(r)
                 report_lines.append(
                     f"{emoji} **{self._get_display_name(r, report_language)}({r.code})**: "
-                    f"{localize_operation_advice(r.operation_advice, report_language)} | "
+                    f"{self._display_operation_advice(r.operation_advice, report_language)} | "
                     f"{labels['score_label']} {r.sentiment_score} | "
-                    f"{localize_trend_prediction(r.trend_prediction, report_language)}"
+                    f"{self._display_trend_prediction(r.trend_prediction, report_language)}"
                 )
         else:
             report_lines.extend([f"## 📈 {labels['report_title']}", ""])
@@ -601,9 +629,9 @@ class NotificationService(
                 report_lines.extend([
                     f"### {emoji} {self._get_display_name(result, report_language)} ({result.code})",
                     "",
-                    f"**{labels['action_advice_label']}：{localize_operation_advice(result.operation_advice, report_language)}** | "
+                    f"**{labels['action_advice_label']}：{self._display_operation_advice(result.operation_advice, report_language)}** | "
                     f"**{labels['score_label']}：{result.sentiment_score}** | "
-                    f"**{labels['trend_label']}：{localize_trend_prediction(result.trend_prediction, report_language)}** | "
+                    f"**{labels['trend_label']}：{self._display_trend_prediction(result.trend_prediction, report_language)}** | "
                     f"**Confidence：{confidence_stars}**",
                     "",
                 ])
@@ -802,6 +830,7 @@ class NotificationService(
                 extra_context={
                     **self._get_history_compare_context(results),
                     "report_language": report_language,
+                    "report_decision_style": self._get_report_decision_style(),
                 },
             )
             if out:
@@ -837,9 +866,9 @@ class NotificationService(
                 display_name = self._get_display_name(r, report_language)
                 report_lines.append(
                     f"{signal_emoji} **{display_name}({r.code})**: "
-                        f"{localize_operation_advice(r.operation_advice, report_language)} · "
+                        f"{self._display_operation_advice(r.operation_advice, report_language)} · "
                         f"{labels['score_label']} {r.sentiment_score} · "
-                        f"{localize_trend_prediction(r.trend_prediction, report_language)}"
+                        f"{self._display_trend_prediction(r.trend_prediction, report_language)}"
                 )
             report_lines.extend([
                 "",
@@ -903,7 +932,8 @@ class NotificationService(
                 report_lines.extend([
                     f"### 📌 {labels['core_conclusion_heading']}",
                     "",
-                    f"**{signal_emoji} {signal_text}** · {localize_trend_prediction(result.trend_prediction, report_language)}",
+                    f"**{signal_emoji} {self._display_operation_advice(result.operation_advice, report_language)}** · "
+                    f"{self._display_trend_prediction(result.trend_prediction, report_language)}",
                     "",
                     f"> **{labels['one_sentence_label']}**: {one_sentence}",
                     "",
@@ -912,9 +942,12 @@ class NotificationService(
                 ])
                 # 持仓分类建议
                 if pos_advice:
+                    fit_for, avoid_for = self._investor_fit_lines(result.operation_advice, report_language)
                     report_lines.extend([
-                        f"- 🆕 {labels['no_position_label']}：{pos_advice.get('no_position', localize_operation_advice(result.operation_advice, report_language))}",
+                        f"- 🆕 {labels['no_position_label']}：{pos_advice.get('no_position', self._display_operation_advice(result.operation_advice, report_language))}",
                         f"- 💼 {labels['has_position_label']}：{pos_advice.get('has_position', labels['continue_holding'])}",
+                        f"- {fit_for}",
+                        f"- {avoid_for}",
                         "",
                     ])
 
@@ -1114,9 +1147,9 @@ class NotificationService(
                 stock_name = self._get_display_name(r, report_language)
                 lines.append(
                     f"{signal_emoji} **{stock_name}({r.code})**: "
-                    f"{localize_operation_advice(r.operation_advice, report_language)} | "
+                    f"{self._display_operation_advice(r.operation_advice, report_language)} | "
                     f"{labels['score_label']} {r.sentiment_score} | "
-                    f"{localize_trend_prediction(r.trend_prediction, report_language)}"
+                    f"{self._display_trend_prediction(r.trend_prediction, report_language)}"
                 )
         else:
             for result in sorted_results:
@@ -1130,7 +1163,10 @@ class NotificationService(
                 stock_name = self._get_display_name(result, report_language)
                 
                 # 标题行：信号等级 + 股票名称
-                lines.append(f"### {signal_emoji} **{signal_text}** | {stock_name}({result.code})")
+                lines.append(
+                    f"### {signal_emoji} **{self._display_operation_advice(result.operation_advice, report_language)}** | "
+                    f"{stock_name}({result.code})"
+                )
                 lines.append("")
                 
                 # 核心决策（一句话）
@@ -1195,10 +1231,13 @@ class NotificationService(
                 if pos_advice:
                     no_pos = str(pos_advice.get('no_position', ''))
                     has_pos = str(pos_advice.get('has_position', ''))
+                    fit_for, avoid_for = self._investor_fit_lines(result.operation_advice, report_language)
                     if no_pos:
                         lines.append(f"🆕 {labels['no_position_label']}: {no_pos[:50]}")
                     if has_pos:
                         lines.append(f"💼 {labels['has_position_label']}: {has_pos[:50]}")
+                    lines.append(f"• {fit_for}")
+                    lines.append(f"• {avoid_for}")
                     lines.append("")
                 
                 # 检查清单简化版
@@ -1264,9 +1303,9 @@ class NotificationService(
             # 核心信息行
             lines.append(f"### {emoji} {self._get_display_name(result, report_language)}({result.code})")
             lines.append(
-                f"**{localize_operation_advice(result.operation_advice, report_language)}** | "
+                f"**{self._display_operation_advice(result.operation_advice, report_language)}** | "
                 f"{labels['score_label']}:{result.sentiment_score} | "
-                f"{localize_trend_prediction(result.trend_prediction, report_language)}"
+                f"{self._display_trend_prediction(result.trend_prediction, report_language)}"
             )
             
             # 操作理由（截断）
@@ -1352,7 +1391,7 @@ class NotificationService(
             one = (core.get('one_sentence') or r.analysis_summary or '')[:60]
             lines.append(
                 f"**{name}({r.code})** {emoji} "
-                f"{localize_operation_advice(r.operation_advice, report_language)} | "
+                f"{self._display_operation_advice(r.operation_advice, report_language)} | "
                 f"{labels['score_label']} {r.sentiment_score} | {one}"
             )
         lines.append("")
@@ -1386,7 +1425,8 @@ class NotificationService(
         lines = [
             f"## {signal_emoji} {stock_name} ({result.code})",
             "",
-            f"> {report_date} | {labels['score_label']}: **{result.sentiment_score}** | {localize_trend_prediction(result.trend_prediction, report_language)}",
+            f"> {report_date} | {labels['score_label']}: **{result.sentiment_score}** | "
+            f"{self._display_trend_prediction(result.trend_prediction, report_language)}",
             "",
         ]
 
@@ -1398,7 +1438,7 @@ class NotificationService(
             lines.extend([
                 f"### 📌 {labels['core_conclusion_heading']}",
                 "",
-                f"**{signal_text}**: {one_sentence}",
+                f"**{self._display_operation_advice(result.operation_advice, report_language)}**: {one_sentence}",
                 "",
             ])
         
@@ -1460,11 +1500,14 @@ class NotificationService(
         # 持仓建议
         pos_advice = core.get('position_advice', {}) if core else {}
         if pos_advice:
+            fit_for, avoid_for = self._investor_fit_lines(result.operation_advice, report_language)
             lines.extend([
                 f"### 💼 {labels['position_advice_heading']}",
                 "",
-                f"- 🆕 **{labels['no_position_label']}**: {pos_advice.get('no_position', localize_operation_advice(result.operation_advice, report_language))}",
+                f"- 🆕 **{labels['no_position_label']}**: {pos_advice.get('no_position', self._display_operation_advice(result.operation_advice, report_language))}",
                 f"- 💼 **{labels['has_position_label']}**: {pos_advice.get('has_position', labels['continue_holding'])}",
+                f"- {fit_for}",
+                f"- {avoid_for}",
                 "",
             ])
         
@@ -1768,7 +1811,7 @@ class NotificationBuilder:
             _, emoji, _ = get_signal_level(r.operation_advice, r.sentiment_score, report_language)
             name = get_localized_stock_name(r.name, r.code, report_language)
             lines.append(
-                f"{emoji} {name}({r.code}): {localize_operation_advice(r.operation_advice, report_language)} | "
+                f"{emoji} {name}({r.code}): {self._display_operation_advice(r.operation_advice, report_language)} | "
                 f"{labels['score_label']} {r.sentiment_score}"
             )
         

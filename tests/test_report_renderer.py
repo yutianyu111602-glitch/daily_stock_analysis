@@ -187,6 +187,44 @@ class TestReportRenderer(unittest.TestCase):
         self.assertIn("- 当前价/MA5/MA10/MA20：17.83 / 17.28 / 16.91 / 16.62", out)
         self.assertIn("- 理想买入点：17.50", out)
 
+    def test_render_markdown_full_supports_conservative_decision_style(self) -> None:
+        """Conservative style should rewrite signals for steadier investors."""
+        r = _make_result(
+            operation_advice="买入",
+            analysis_summary="放量突破，可关注。",
+            dashboard={
+                "core_conclusion": {
+                    "one_sentence": "建议回踩确认后再考虑参与。",
+                    "position_advice": {
+                        "no_position": "仅回踩确认后小仓试错，不追高。",
+                        "has_position": "保留底仓，跌破止损位先减仓。",
+                    },
+                },
+                "intelligence": {
+                    "risk_alerts": ["短线涨幅偏大，追高性价比一般。"],
+                },
+                "battle_plan": {
+                    "sniper_points": {
+                        "ideal_buy": "17.50",
+                        "stop_loss": "16.90",
+                        "take_profit": "18.60",
+                    }
+                },
+            },
+        )
+
+        out = render(
+            "markdown",
+            [r],
+            summary_only=False,
+            extra_context={"report_decision_style": "conservative"},
+        )
+
+        self.assertIsNotNone(out)
+        self.assertIn("可小仓试错", out)
+        self.assertIn("适合：有纪律的低吸型空仓者", out)
+        self.assertIn("不适合：追高入场", out)
+
     def test_render_unknown_platform_returns_none(self) -> None:
         """Unknown platform returns None (caller fallback)."""
         r = _make_result()
