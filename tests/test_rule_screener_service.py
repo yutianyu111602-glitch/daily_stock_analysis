@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -92,6 +93,7 @@ def _build_service(
     service.notifier = MagicMock()
     service.fetcher_manager = MagicMock()
     service._load_trade_dates = MagicMock(return_value=["20260413", "20260201"])
+    service._select_analysis_trade_dates = MagicMock(return_value=["20260413", "20260201"])
     service._load_stock_universe = MagicMock(return_value=pd.DataFrame())
     service._load_daily_history = MagicMock(
         return_value=daily_history if daily_history is not None else _build_matching_history("300565")
@@ -295,39 +297,76 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
 
         config, adjustments = _build_dynamic_rule_config(base, "neutral")
 
+        self.assertEqual(config.min_prior_rise_pct, 18.0)
         self.assertEqual(config.min_volume_ratio, 1.3)
         self.assertEqual(config.min_turnover_rate, 4.5)
         self.assertEqual(config.min_sector_change_pct, 1.2)
         self.assertEqual(config.max_bias_ma5_pct, 8.5)
-        self.assertEqual(len(adjustments), 4)
-        self.assertEqual([item.name for item in adjustments], ["量比", "换手率", "板块涨幅阈值", "MA5乖离率"])
+        self.assertEqual(config.abc_min_pullback_pct, 4.0)
+        self.assertEqual(config.abc_min_rebound_pct, 2.0)
+        self.assertEqual(config.abc_min_c_leg_pct, 1.5)
+        self.assertEqual(config.abc_min_c_retention_ratio, 0.86)
+        self.assertEqual(config.abc_rebreak_buffer_pct, -0.2)
+        self.assertEqual(len(adjustments), 10)
+        self.assertEqual(
+            [item.name for item in adjustments],
+            [
+                "前高前累计涨幅",
+                "量比",
+                "换手率",
+                "板块涨幅阈值",
+                "MA5乖离率",
+                "ABC-A段回撤阈值",
+                "ABC-B段反抽阈值",
+                "ABC-C段回踩阈值",
+                "ABC-C段保留比例",
+                "ABC再突破缓冲",
+            ],
+        )
 
     def test_build_dynamic_rule_config_weak_relaxes_to_watchlist_floor(self) -> None:
         base = AshareRuleConfig()
 
         config, adjustments = _build_dynamic_rule_config(base, "weak")
 
+        self.assertEqual(config.min_prior_rise_pct, 18.0)
         self.assertEqual(config.min_volume_ratio, 1.2)
         self.assertEqual(config.min_turnover_rate, 4.0)
         self.assertEqual(config.min_sector_change_pct, 0.8)
         self.assertEqual(config.max_bias_ma5_pct, 9.0)
-        self.assertEqual(len(adjustments), 4)
-        self.assertEqual([item.name for item in adjustments], ["量比", "换手率", "板块涨幅阈值", "MA5乖离率"])
+        self.assertEqual(config.abc_min_pullback_pct, 3.5)
+        self.assertEqual(config.abc_min_rebound_pct, 1.5)
+        self.assertEqual(config.abc_min_c_leg_pct, 1.0)
+        self.assertEqual(config.abc_min_c_retention_ratio, 0.82)
+        self.assertEqual(config.abc_rebreak_buffer_pct, -0.4)
+        self.assertEqual(len(adjustments), 10)
 
     def test_build_dynamic_rule_config_does_not_tighten_looser_base(self) -> None:
         base = AshareRuleConfig(
+            min_prior_rise_pct=17.0,
             min_volume_ratio=1.1,
             min_turnover_rate=3.8,
             min_sector_change_pct=0.6,
             max_bias_ma5_pct=9.2,
+            abc_min_pullback_pct=3.0,
+            abc_min_rebound_pct=1.0,
+            abc_min_c_leg_pct=0.8,
+            abc_min_c_retention_ratio=0.8,
+            abc_rebreak_buffer_pct=-0.5,
         )
 
         config, adjustments = _build_dynamic_rule_config(base, "neutral")
 
+        self.assertEqual(config.min_prior_rise_pct, 17.0)
         self.assertEqual(config.min_volume_ratio, 1.1)
         self.assertEqual(config.min_turnover_rate, 3.8)
         self.assertEqual(config.min_sector_change_pct, 0.6)
         self.assertEqual(config.max_bias_ma5_pct, 9.2)
+        self.assertEqual(config.abc_min_pullback_pct, 3.0)
+        self.assertEqual(config.abc_min_rebound_pct, 1.0)
+        self.assertEqual(config.abc_min_c_leg_pct, 0.8)
+        self.assertEqual(config.abc_min_c_retention_ratio, 0.8)
+        self.assertEqual(config.abc_rebreak_buffer_pct, -0.5)
         self.assertEqual(adjustments, [])
 
     def test_build_screening_report_handles_empty_candidates(self) -> None:
@@ -383,6 +422,23 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         self.assertIn("万向钱潮 (000559)", report)
         self.assertIn("华自科技 (300490)", report)
 
+    def test_build_screening_report_renders_manual_review_pool(self) -> None:
+        candidate = _build_candidate("600010", name="包钢股份", sector_name="钢铁", sector_change_pct=1.21)
+        candidate.matched_condition_count = 7
+        candidate.total_condition_count = 8
+        candidate.failed_conditions = ["前高前累计涨幅未达到 20%"]
+        candidate.notes.append("未满足条件：前高前累计涨幅未达到 20%")
+
+        report = build_screening_report(
+            candidates=[],
+            report_date="2026-04-13",
+            grouped_candidates=RuleScreeningBuckets(manual_review_pool=[candidate]),
+        )
+
+        self.assertIn("## 人工精选池（1 只）", report)
+        self.assertIn("条件命中：7/8", report)
+        self.assertIn("未满足条件：前高前累计涨幅未达到 20%", report)
+
     def test_build_screening_report_only_outputs_empty_copy_when_all_buckets_are_empty(self) -> None:
         empty_report = build_screening_report(
             candidates=[],
@@ -403,6 +459,23 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         self.assertNotIn("## 技术候选池", empty_report)
         self.assertNotIn("未筛出符合条件的A股股票", technical_only_report)
         self.assertIn("## 技术候选池（1 只）", technical_only_report)
+
+    def test_build_screening_report_marks_sector_rule_as_reference_for_manual_review_only(self) -> None:
+        report = build_screening_report(
+            candidates=[],
+            report_date="2026-04-13",
+            grouped_candidates={
+                "full": [],
+                "relaxed": [],
+                "technical": [],
+                "manual": [_build_candidate("600010", name="包钢股份", sector_name="钢铁", sector_change_pct=1.21)],
+            },
+        )
+
+        self.assertIn(
+            "所属板块涨幅 > 2%（人工精选池中改为排序参考，不作硬性剔除）",
+            report,
+        )
 
     def test_build_screening_report_marks_sector_rule_as_reference_for_technical_pool_only(self) -> None:
         report = build_screening_report(
@@ -626,7 +699,7 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         self.assertTrue(any("量比" in note for note in result.profile_notes))
         self.assertEqual(
             result.stock_pool_notes,
-            ["当前为技术候选池名单，未自动并入自选池，请人工确认后再决定是否加入。"],
+            ["当前为技术/人工精选候选名单，未自动并入自选池，请人工确认后再决定是否加入。"],
         )
         service._sync_candidates_to_stock_pool.assert_not_called()
         self.assertEqual(
@@ -731,6 +804,64 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         self.assertIn("技术候选池（1 只）", result.report)
         self.assertTrue(any("已禁用动态放宽" in note for note in result.profile_notes))
 
+    def test_run_falls_back_to_manual_review_pool_when_all_rule_buckets_are_empty(self) -> None:
+        service = _build_service(
+            config=AshareRuleConfig(auto_relax_if_empty=True),
+            daily_history=_build_matching_history("600010"),
+            latest_turnover={"600010": 7.1},
+        )
+        service.fetcher_manager.get_market_stats.return_value = {
+            "index_change": {"sh": 0.0, "sz": -0.1, "cyb": -0.1},
+            "up_count": 2400,
+            "down_count": 2500,
+            "limit_up_count": 38,
+            "limit_down_count": 12,
+            "sector_median": 0.0,
+        }
+        service._select_technical_candidates.side_effect = [[], []]
+        service._load_sector_snapshot.side_effect = [{}, {}, {"600010": [{"name": "钢铁", "change_pct": 1.21}]}]
+
+        manual_candidate = _build_candidate("600010", name="包钢股份", sector_name="钢铁", sector_change_pct=1.21)
+        manual_candidate.matched_condition_count = 7
+        manual_candidate.total_condition_count = 8
+        manual_candidate.failed_conditions = ["前高前累计涨幅未达到 20%"]
+
+        with patch("src.services.rule_screener_service.apply_selection_rules", return_value=[]), \
+             patch("src.services.rule_screener_service.build_manual_review_pool", return_value=[manual_candidate]), \
+             patch("src.services.rule_screener_service._build_dynamic_rule_config") as build_dynamic:
+            build_dynamic.return_value = (AshareRuleConfig(auto_relax_if_empty=False), [])
+            result = service.run(send_notification=False, ai_review=False)
+
+        self.assertEqual([item.code for item in result.candidates], ["600010"])
+        self.assertIn("人工精选池（1 只）", result.report)
+        self.assertTrue(any("人工精选池" in note for note in result.profile_notes))
+        service._sync_candidates_to_stock_pool.assert_not_called()
+
+    def test_run_skips_empty_notification_when_empty_reports_are_disabled(self) -> None:
+        service = _build_service(
+            config=AshareRuleConfig(auto_relax_if_empty=False, notify_when_empty=True),
+            daily_history=_build_matching_history("300565"),
+            latest_turnover={"300565": 7.6},
+        )
+        service.fetcher_manager.get_market_stats.return_value = {
+            "index_change": {"sh": 0.0, "sz": -0.1, "cyb": -0.1},
+            "up_count": 2400,
+            "down_count": 2500,
+            "limit_up_count": 38,
+            "limit_down_count": 12,
+            "sector_median": 0.0,
+        }
+        service._select_technical_candidates.return_value = []
+        service._load_sector_snapshot.return_value = {}
+
+        with patch.dict(os.environ, {"RULE_SCREENER_ALLOW_EMPTY_REPORT": "false"}, clear=False), \
+             patch("src.services.rule_screener_service.apply_selection_rules", return_value=[]), \
+             patch("src.services.rule_screener_service.build_manual_review_pool", return_value=[]):
+            result = service.run(send_notification=True, ai_review=False)
+
+        self.assertEqual(result.candidates, [])
+        service.notifier.send.assert_not_called()
+
     def test_run_auto_syncs_strict_hits_without_entering_dynamic_relax(self) -> None:
         strict_candidates = [
             _build_candidate("300490", name="华自科技", sector_name="基础化工", sector_change_pct=3.4),
@@ -765,6 +896,40 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         build_dynamic.assert_not_called()
         self.assertIn("完整命中（2 只）", result.report)
         service._sync_candidates_to_stock_pool.assert_called_once_with(strict_candidates)
+
+    def test_run_uses_latest_completed_trade_date_instead_of_latest_open_session(self) -> None:
+        strict_candidates = [
+            _build_candidate("300565", name="科信技术", sector_name="基础化工", sector_change_pct=3.1),
+        ]
+        service = _build_service(
+            config=AshareRuleConfig(auto_relax_if_empty=False),
+            daily_history=_build_matching_history("300565"),
+            latest_turnover={"300565": 7.6},
+        )
+        service._load_trade_dates = MagicMock(return_value=["20260414", "20260413", "20260410"])
+        service._select_analysis_trade_dates = MagicMock(return_value=["20260413", "20260410"])
+        service.fetcher_manager.get_market_stats.return_value = {
+            "index_change": {"sh": 0.3, "sz": 0.1, "cyb": 0.0},
+            "up_count": 2600,
+            "down_count": 2200,
+            "limit_up_count": 45,
+            "limit_down_count": 10,
+            "sector_median": 0.2,
+        }
+        service._select_technical_candidates.return_value = ["300565"]
+        service._load_sector_snapshot.return_value = {
+            "300565": [{"name": "基础化工", "change_pct": 3.1}],
+        }
+
+        with patch(
+            "src.services.rule_screener_service.get_effective_trading_date",
+            return_value=datetime(2026, 4, 13).date(),
+        ), patch("src.services.rule_screener_service.apply_selection_rules", return_value=strict_candidates):
+            result = service.run(send_notification=False, ai_review=False)
+
+        service._select_analysis_trade_dates.assert_called_once_with(["20260414", "20260413", "20260410"], "20260413")
+        service._load_latest_turnover.assert_called_once_with("20260413", trade_dates=["20260413", "20260410"])
+        self.assertEqual(result.trade_date, "20260413")
 
     def test_run_reviews_all_display_candidates_when_ai_review_limit_is_unlimited(self) -> None:
         strict_candidates = [
@@ -1172,9 +1337,10 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
                 with patch("src.services.rule_screener_service.build_technical_candidate_pool", return_value=[]):
                     result = service.run(send_notification=False, ai_review=False)
 
-                self.assertEqual(result.candidates, [])
-                self.assertIn("今日未筛出符合条件的A股股票", result.report)
+                self.assertEqual([item.code for item in result.candidates], ["300565"])
+                self.assertIn("人工精选池（1 只）", result.report)
                 self.assertIn("板块数据缺失，仅供人工判断", result.report)
+                self.assertIn("未满足条件：所属板块涨幅未达到 0.8%", result.report)
                 self.assertTrue(any("板块数据缺失，仅供人工判断" in note for note in result.profile_notes))
 
 

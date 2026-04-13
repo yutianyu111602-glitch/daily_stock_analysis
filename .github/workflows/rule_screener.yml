@@ -109,7 +109,11 @@ jobs:
           RULE_SCREENER_DISABLE_GEMINI: ${{ vars.RULE_SCREENER_DISABLE_GEMINI || 'true' }}
           RULE_SCREENER_DISABLE_ANTHROPIC: ${{ vars.RULE_SCREENER_DISABLE_ANTHROPIC || 'true' }}
           RULE_SCREENER_CACHE_DIR: .cache/rule_screener_v2/tushare
-          RULE_SCREENER_DEBUG_SECTOR: true
+          RULE_SCREENER_DYNAMIC_MODE: "${{ vars.RULE_SCREENER_DYNAMIC_MODE || 'true' }}"
+          RULE_SCREENER_ALLOW_EMPTY_REPORT: "${{ vars.RULE_SCREENER_ALLOW_EMPTY_REPORT || 'false' }}"
+          RULE_SCREENER_MANUAL_REVIEW_LIMIT: "${{ vars.RULE_SCREENER_MANUAL_REVIEW_LIMIT || '20' }}"
+          RULE_SCREENER_DEBUG_SECTOR: "${{ vars.RULE_SCREENER_DEBUG_SECTOR || 'true' }}"
+          RULE_SCREENER_DEBUG_REGIME: "${{ vars.RULE_SCREENER_DEBUG_REGIME || 'true' }}"
         run: |
           ARGS=""
           if [ "${{ github.event.inputs.ai_review || 'true' }}" != "true" ]; then
