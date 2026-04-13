@@ -14,6 +14,7 @@ from src.services.rule_screener_service import (
     DynamicAdjustment,
     RuleScreeningCandidate,
     RuleScreeningBuckets,
+    TurnoverSnapshot,
     _build_dynamic_rule_config,
     _build_sector_snapshot_from_tushare,
     _classify_market_regime,
@@ -983,6 +984,198 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
             self.assertTrue(df.empty)
             self.assertFalse((service.cache_dir / "index_member_all" / "202604.pkl").exists())
             service.tushare_fetcher._call_api_with_rate_limit.assert_called_once()
+
+    def test_load_latest_turnover_falls_back_to_previous_trade_date_when_daily_basic_is_empty(self) -> None:
+        service = object.__new__(AshareRuleScreenerService)
+        service._load_trade_dates = MagicMock(return_value=["20260414", "20260411", "20260410"])
+        service._call_tushare_cached = MagicMock(
+            side_effect=lambda api_name, **kwargs: (
+                pd.DataFrame()
+                if kwargs["trade_date"] == "20260414"
+                else pd.DataFrame([{"ts_code": "300490.SZ", "turnover_rate": 7.84}])
+            )
+        )
+
+        snapshot = service._load_latest_turnover("20260414")
+
+        self.assertIsInstance(snapshot, TurnoverSnapshot)
+        self.assertEqual(snapshot.turnover_by_code, {"300490": 7.84})
+        self.assertEqual(snapshot.source, "daily_basic:20260411")
+        self.assertTrue(snapshot.is_partial)
+        self.assertTrue(any("上一交易日" in note for note in snapshot.notes))
+
+    def test_load_latest_turnover_returns_unknown_snapshot_when_current_and_previous_daily_basic_are_empty(self) -> None:
+        service = object.__new__(AshareRuleScreenerService)
+        service._load_trade_dates = MagicMock(return_value=["20260414", "20260411", "20260410"])
+        service._call_tushare_cached = MagicMock(return_value=pd.DataFrame())
+
+        snapshot = service._load_latest_turnover("20260414")
+
+        self.assertIsInstance(snapshot, TurnoverSnapshot)
+        self.assertEqual(snapshot.turnover_by_code, {})
+        self.assertEqual(snapshot.source, "unknown")
+        self.assertTrue(snapshot.is_partial)
+        self.assertTrue(any("unknown" in note for note in snapshot.notes))
+
+    def test_run_preserves_prefilter_turnover_note_when_open_data_fallback_is_used(self) -> None:
+        service = _build_service(
+            config=AshareRuleConfig(auto_relax_if_empty=False, allow_open_data_fallback=True),
+            daily_history=_build_matching_history("300565"),
+        )
+        service._load_trade_dates.side_effect = RuntimeError("trade_cal unavailable")
+        service._load_history_via_prefilter_fallback = MagicMock(
+            return_value=(
+                _build_matching_history("300565"),
+                TurnoverSnapshot(
+                    turnover_by_code={"300565": 7.6},
+                    source="prefilter_snapshot:20260414",
+                    is_partial=True,
+                    notes=["已回退到开放快照预筛换手率数据，仅供人工判断。"],
+                ),
+                "20260414",
+            )
+        )
+        service.fetcher_manager.get_market_stats.return_value = {
+            "index_change": {"sh": 0.3, "sz": 0.2, "cyb": 0.1},
+            "up_count": 2600,
+            "down_count": 2200,
+            "limit_up_count": 45,
+            "limit_down_count": 10,
+            "sector_median": 0.2,
+        }
+        service._select_technical_candidates.return_value = ["300565"]
+        service._load_sector_snapshot.return_value = {"300565": [{"name": "基础化工", "change_pct": 3.1}]}
+
+        with patch(
+            "src.services.rule_screener_service.apply_selection_rules",
+            return_value=[_build_candidate("300565", name="科信技术", sector_name="基础化工", sector_change_pct=3.1)],
+        ):
+            result = service.run(send_notification=False, ai_review=False)
+
+        service._load_history_via_prefilter_fallback.assert_called_once()
+        self.assertEqual([item.code for item in result.candidates], ["300565"])
+        self.assertTrue(any("开放快照预筛换手率数据" in note for note in result.profile_notes))
+        self.assertIn("开放快照预筛换手率数据", result.report)
+
+    def test_run_keeps_technical_pool_and_marks_report_when_sector_data_is_missing(self) -> None:
+        for missing_api in ("sw_daily", "index_member_all"):
+            with self.subTest(missing_api=missing_api):
+                service = _build_service(
+                    config=AshareRuleConfig(auto_relax_if_empty=True),
+                    daily_history=_build_matching_history("300565"),
+                    latest_turnover={"300565": 7.6},
+                )
+                service.fetcher_manager.get_market_stats.return_value = {
+                    "index_change": {"sh": 0.1, "sz": 0.0, "cyb": -0.1},
+                    "up_count": 2400,
+                    "down_count": 2300,
+                    "limit_up_count": 40,
+                    "limit_down_count": 12,
+                    "sector_median": 0.0,
+                }
+                service._select_technical_candidates.side_effect = [["300565"], ["300565"]]
+                service.tushare_fetcher = MagicMock()
+                service.tushare_fetcher._convert_stock_code.side_effect = lambda code: f"{code}.SZ"
+                service._load_sector_snapshot = AshareRuleScreenerService._load_sector_snapshot.__get__(
+                    service,
+                    AshareRuleScreenerService,
+                )
+
+                index_member_df = pd.DataFrame(
+                    [
+                        {
+                            "l1_code": "801030.SI",
+                            "l1_name": "基础化工",
+                            "ts_code": "300565.SZ",
+                            "name": "科信技术",
+                            "in_date": "20150101",
+                            "out_date": None,
+                        }
+                    ]
+                )
+                sw_daily_df = pd.DataFrame(
+                    [
+                        {"ts_code": "801030.SI", "name": "基础化工", "pct_change": 1.1},
+                    ]
+                )
+
+                def fake_call_tushare_cached(api_name: str, **kwargs) -> pd.DataFrame:
+                    if api_name == "index_member_all":
+                        return pd.DataFrame() if missing_api == "index_member_all" else index_member_df
+                    if api_name == "sw_daily":
+                        return pd.DataFrame() if missing_api == "sw_daily" else sw_daily_df
+                    raise AssertionError(f"unexpected api_name: {api_name}")
+
+                service._call_tushare_cached = MagicMock(side_effect=fake_call_tushare_cached)
+
+                result = service.run(send_notification=False, ai_review=False)
+
+                self.assertEqual([item.code for item in result.candidates], ["300565"])
+                self.assertIn("## 技术候选池（1 只）", result.report)
+                self.assertIn("板块数据缺失，仅供人工判断", result.report)
+                self.assertTrue(any("板块数据缺失，仅供人工判断" in note for note in result.profile_notes))
+                self.assertTrue(
+                    any("板块数据缺失，仅供人工判断" in note for candidate in result.candidates for note in candidate.notes)
+                )
+
+    def test_run_includes_data_notes_when_all_buckets_are_empty_for_missing_sector_data(self) -> None:
+        for missing_api in ("sw_daily", "index_member_all"):
+            with self.subTest(missing_api=missing_api):
+                service = _build_service(
+                    config=AshareRuleConfig(auto_relax_if_empty=True),
+                    daily_history=_build_matching_history("300565"),
+                    latest_turnover={"300565": 7.6},
+                )
+                service.fetcher_manager.get_market_stats.return_value = {
+                    "index_change": {"sh": 0.1, "sz": 0.0, "cyb": -0.1},
+                    "up_count": 2400,
+                    "down_count": 2300,
+                    "limit_up_count": 40,
+                    "limit_down_count": 12,
+                    "sector_median": 0.0,
+                }
+                service._select_technical_candidates.return_value = ["300565"]
+                service.tushare_fetcher = MagicMock()
+                service.tushare_fetcher._convert_stock_code.side_effect = lambda code: f"{code}.SZ"
+                service._load_sector_snapshot = AshareRuleScreenerService._load_sector_snapshot.__get__(
+                    service,
+                    AshareRuleScreenerService,
+                )
+
+                index_member_df = pd.DataFrame(
+                    [
+                        {
+                            "l1_code": "801030.SI",
+                            "l1_name": "基础化工",
+                            "ts_code": "300565.SZ",
+                            "name": "科信技术",
+                            "in_date": "20150101",
+                            "out_date": None,
+                        }
+                    ]
+                )
+                sw_daily_df = pd.DataFrame(
+                    [
+                        {"ts_code": "801030.SI", "name": "基础化工", "pct_change": 1.1},
+                    ]
+                )
+
+                def fake_call_tushare_cached(api_name: str, **kwargs) -> pd.DataFrame:
+                    if api_name == "index_member_all":
+                        return pd.DataFrame() if missing_api == "index_member_all" else index_member_df
+                    if api_name == "sw_daily":
+                        return pd.DataFrame() if missing_api == "sw_daily" else sw_daily_df
+                    raise AssertionError(f"unexpected api_name: {api_name}")
+
+                service._call_tushare_cached = MagicMock(side_effect=fake_call_tushare_cached)
+
+                with patch("src.services.rule_screener_service.build_technical_candidate_pool", return_value=[]):
+                    result = service.run(send_notification=False, ai_review=False)
+
+                self.assertEqual(result.candidates, [])
+                self.assertIn("今日未筛出符合条件的A股股票", result.report)
+                self.assertIn("板块数据缺失，仅供人工判断", result.report)
+                self.assertTrue(any("板块数据缺失，仅供人工判断" in note for note in result.profile_notes))
 
 
 if __name__ == "__main__":

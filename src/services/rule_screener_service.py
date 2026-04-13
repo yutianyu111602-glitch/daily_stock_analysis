@@ -104,6 +104,22 @@ class RuleScreeningBuckets:
 
 
 @dataclass
+class TurnoverSnapshot:
+    turnover_by_code: Dict[str, float] = field(default_factory=dict)
+    source: str = "daily_basic"
+    is_partial: bool = False
+    notes: List[str] = field(default_factory=list)
+
+
+@dataclass
+class SectorSnapshotLoadResult:
+    snapshot: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
+    source: str = "tushare"
+    is_partial: bool = False
+    notes: List[str] = field(default_factory=list)
+
+
+@dataclass
 class RuleScreeningRunResult:
     trade_date: str
     candidates: List[RuleScreeningCandidate]
@@ -120,6 +136,43 @@ class RuleScreeningStageResult:
     technical_candidate_codes: List[str] = field(default_factory=list)
     sector_snapshot: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
     candidates: List[RuleScreeningCandidate] = field(default_factory=list)
+    data_notes: List[str] = field(default_factory=list)
+
+
+def _coerce_turnover_snapshot(
+    latest_turnover: Optional[Union[Dict[str, float], TurnoverSnapshot]],
+) -> TurnoverSnapshot:
+    if isinstance(latest_turnover, TurnoverSnapshot):
+        return latest_turnover
+    if not latest_turnover:
+        return TurnoverSnapshot(source="unknown", is_partial=True)
+
+    turnover_by_code: Dict[str, float] = {}
+    for code, value in latest_turnover.items():
+        if value is None or pd.isna(value):
+            continue
+        turnover_by_code[normalize_stock_code(code)] = float(value)
+    return TurnoverSnapshot(turnover_by_code=turnover_by_code)
+
+
+def _coerce_sector_snapshot_result(
+    sector_snapshot: Union[Dict[str, List[Dict[str, Any]]], SectorSnapshotLoadResult],
+    candidate_codes: Sequence[str],
+) -> SectorSnapshotLoadResult:
+    if isinstance(sector_snapshot, SectorSnapshotLoadResult):
+        return sector_snapshot
+
+    normalized_snapshot = {
+        normalize_stock_code(code): list((sector_snapshot or {}).get(normalize_stock_code(code), []) or [])
+        for code in candidate_codes
+    }
+    return SectorSnapshotLoadResult(snapshot=normalized_snapshot)
+
+
+def _append_unique_notes(target: List[str], notes: Optional[Sequence[str]]) -> None:
+    for note in notes or []:
+        if note and note not in target:
+            target.append(str(note))
 
 
 def _normalize_sector_name(name: str) -> str:
@@ -268,7 +321,7 @@ def _pick_best_sector(
 
 def _build_candidate(
     group: pd.DataFrame,
-    latest_turnover: Dict[str, float],
+    latest_turnover: Union[Dict[str, float], TurnoverSnapshot],
     sector_snapshot: Dict[str, List[Dict[str, Any]]],
     config: AshareRuleConfig,
     *,
@@ -289,7 +342,9 @@ def _build_candidate(
     ma20 = float(latest["ma20"])
     bias_ma5_pct = float(latest["bias_ma5_pct"])
     volume_ratio = float(latest["volume_ratio"])
-    turnover_rate = float(latest_turnover.get(code) or 0.0)
+    turnover_snapshot = _coerce_turnover_snapshot(latest_turnover)
+    turnover_known = code in turnover_snapshot.turnover_by_code
+    turnover_rate = float(turnover_snapshot.turnover_by_code.get(code) or 0.0)
     sector_name, sector_change_pct = _pick_best_sector(sector_snapshot=sector_snapshot, code=code)
     sector_strength_passed = sector_change_pct >= config.min_sector_change_pct
     abc_pattern_confirmed, prior_rise_pct = _detect_abc_pattern(
@@ -307,7 +362,7 @@ def _build_candidate(
         ma5 > ma10 > ma20,
         bias_ma5_pct < config.max_bias_ma5_pct,
         volume_ratio >= config.min_volume_ratio,
-        turnover_rate >= config.min_turnover_rate,
+        turnover_rate >= config.min_turnover_rate if turnover_known else True,
         sector_strength_passed if require_sector_strength else True,
         prior_rise_pct >= config.min_prior_rise_pct,
         abc_pattern_confirmed,
@@ -323,6 +378,10 @@ def _build_candidate(
         f"{sector_name or '板块数据暂缺'} 涨幅 {sector_change_pct:.2f}%",
         f"MA5 乖离率 {bias_ma5_pct:.2f}% ，均线多头排列",
     ]
+    if not turnover_known:
+        notes.append("换手率数据缺失，仅供人工判断")
+    if not sector_snapshot.get(code):
+        notes.append("板块数据缺失，仅供人工判断")
     if not sector_strength_passed:
         notes.append(f"板块强度未达筛选阈值 {config.min_sector_change_pct:.2f}%")
     name = str(latest.get("name") or code)
@@ -649,7 +708,7 @@ def _sample_records(df: Optional[pd.DataFrame], columns: Sequence[str], limit: i
 
 def apply_selection_rules(
     daily_history: pd.DataFrame,
-    latest_turnover: Dict[str, float],
+    latest_turnover: Union[Dict[str, float], TurnoverSnapshot],
     sector_snapshot: Dict[str, List[Dict[str, Any]]],
     config: Optional[AshareRuleConfig] = None,
 ) -> List[RuleScreeningCandidate]:
@@ -683,7 +742,7 @@ def apply_selection_rules(
 
 def build_technical_candidate_pool(
     daily_history: pd.DataFrame,
-    latest_turnover: Dict[str, float],
+    latest_turnover: Union[Dict[str, float], TurnoverSnapshot],
     sector_snapshot: Dict[str, List[Dict[str, Any]]],
     config: Optional[AshareRuleConfig] = None,
 ) -> List[RuleScreeningCandidate]:
@@ -1028,20 +1087,67 @@ class AshareRuleScreenerService:
         merged = merged.merge(names, on="code", how="left")
         return merged
 
-    def _load_latest_turnover(self, trade_date: str) -> Dict[str, float]:
-        df = self._call_tushare_cached(
-            "daily_basic",
-            cache_key=trade_date,
-            trade_date=trade_date,
-            fields="ts_code,turnover_rate",
+    def _load_latest_turnover(
+        self,
+        trade_date: str,
+        *,
+        trade_dates: Optional[Sequence[str]] = None,
+    ) -> TurnoverSnapshot:
+        fallback_trade_date: Optional[str] = None
+        resolved_trade_dates = [str(item) for item in (trade_dates or []) if item]
+        if not resolved_trade_dates:
+            try:
+                resolved_trade_dates = [str(item) for item in self._load_trade_dates() if item]
+            except Exception as exc:
+                logger.warning("换手率回退时获取交易日失败，将直接使用 unknown: %s", exc)
+                resolved_trade_dates = []
+
+        if trade_date in resolved_trade_dates:
+            trade_date_index = resolved_trade_dates.index(trade_date)
+            if trade_date_index + 1 < len(resolved_trade_dates):
+                fallback_trade_date = resolved_trade_dates[trade_date_index + 1]
+        else:
+            earlier_trade_dates = sorted((item for item in resolved_trade_dates if item < trade_date), reverse=True)
+            if earlier_trade_dates:
+                fallback_trade_date = earlier_trade_dates[0]
+
+        candidate_trade_dates = [trade_date]
+        if fallback_trade_date and fallback_trade_date != trade_date:
+            candidate_trade_dates.append(fallback_trade_date)
+
+        for candidate_trade_date in candidate_trade_dates:
+            df = self._call_tushare_cached(
+                "daily_basic",
+                cache_key=candidate_trade_date,
+                trade_date=candidate_trade_date,
+                fields="ts_code,turnover_rate",
+            )
+            if df is None or df.empty:
+                continue
+
+            work_df = df.copy()
+            work_df["code"] = work_df["ts_code"].astype(str).str.split(".").str[0].map(normalize_stock_code)
+            work_df["turnover_rate"] = pd.to_numeric(work_df["turnover_rate"], errors="coerce").fillna(0.0)
+            notes: List[str] = []
+            is_partial = candidate_trade_date != trade_date
+            if is_partial:
+                notes.append(
+                    f"daily_basic({trade_date}) 为空，已回退到上一交易日 {candidate_trade_date} 的换手率数据。"
+                )
+            return TurnoverSnapshot(
+                turnover_by_code=dict(zip(work_df["code"], work_df["turnover_rate"])),
+                source=f"daily_basic:{candidate_trade_date}",
+                is_partial=is_partial,
+                notes=notes,
+            )
+
+        logger.warning("daily_basic 当前与上一交易日均为空，换手率条件将降级为参考项")
+        return TurnoverSnapshot(
+            turnover_by_code={},
+            source="unknown",
+            is_partial=True,
+            notes=[f"daily_basic({trade_date}) 及上一交易日均为空，换手率以 unknown 处理，仅供人工判断。"],
         )
-        if df is None or df.empty:
-            logger.warning("daily_basic 返回为空，换手率规则将全部视作不满足")
-            return {}
-        df = df.copy()
-        df["code"] = df["ts_code"].astype(str).str.split(".").str[0].map(normalize_stock_code)
-        df["turnover_rate"] = pd.to_numeric(df["turnover_rate"], errors="coerce").fillna(0.0)
-        return dict(zip(df["code"], df["turnover_rate"]))
 
     def _load_market_snapshot_fallback(self) -> pd.DataFrame:
         logger.warning("规则选股回退到开放快照模式：先用全市场实时快照预筛，再补候选历史K线")
@@ -1081,21 +1187,36 @@ class AshareRuleScreenerService:
         work_df["turnover_rate"] = pd.to_numeric(work_df["turnover_rate"], errors="coerce").fillna(0.0)
         return work_df
 
-    def _load_history_via_prefilter_fallback(self) -> tuple[pd.DataFrame, Dict[str, float], str]:
+    def _load_history_via_prefilter_fallback(self) -> tuple[pd.DataFrame, TurnoverSnapshot, str]:
         snapshot = self._load_market_snapshot_fallback()
+        trade_date = datetime.now().strftime("%Y%m%d")
+        fallback_note = "已回退到开放快照预筛换手率数据，仅供人工判断。"
         filtered = snapshot[
             (snapshot["volume_ratio"] >= self.rule_config.min_volume_ratio)
             & (snapshot["turnover_rate"] >= self.rule_config.min_turnover_rate)
         ].copy()
         if filtered.empty:
-            return pd.DataFrame(columns=["code", "trade_date", "open", "high", "low", "close", "volume", "name"]), {}, datetime.now().strftime("%Y%m%d")
+            return (
+                pd.DataFrame(columns=["code", "trade_date", "open", "high", "low", "close", "volume", "name"]),
+                TurnoverSnapshot(
+                    turnover_by_code={},
+                    source=f"prefilter_snapshot:{trade_date}",
+                    is_partial=True,
+                    notes=[fallback_note],
+                ),
+                trade_date,
+            )
 
         fetch_limit = int(os.getenv("RULE_SCREENER_HISTORY_FETCH_LIMIT", "120"))
         filtered = filtered.sort_values(["volume_ratio", "turnover_rate"], ascending=False).head(fetch_limit)
 
         frames: List[pd.DataFrame] = []
-        latest_turnover = dict(zip(filtered["code"], filtered["turnover_rate"]))
-        trade_date = datetime.now().strftime("%Y%m%d")
+        latest_turnover = TurnoverSnapshot(
+            turnover_by_code=dict(zip(filtered["code"], filtered["turnover_rate"])),
+            source=f"prefilter_snapshot:{trade_date}",
+            is_partial=True,
+            notes=[fallback_note],
+        )
 
         for row in filtered.itertuples(index=False):
             code = normalize_stock_code(row.code)
@@ -1126,9 +1247,10 @@ class AshareRuleScreenerService:
         candidate_codes: Sequence[str],
         trade_date: str,
         min_sector_change_pct: Optional[float] = None,
-    ) -> Dict[str, List[Dict[str, Any]]]:
+    ) -> SectorSnapshotLoadResult:
+        empty_snapshot = {normalize_stock_code(code): [] for code in candidate_codes}
         if not candidate_codes:
-            return {normalize_stock_code(code): [] for code in candidate_codes}
+            return SectorSnapshotLoadResult(snapshot=empty_snapshot)
         sector_threshold = (
             self.rule_config.min_sector_change_pct
             if min_sector_change_pct is None
@@ -1185,21 +1307,34 @@ class AshareRuleScreenerService:
             )
         if index_member_df is None or index_member_df.empty:
             logger.warning("index_member_all 返回为空，板块强度条件将无法命中")
-            return {normalize_stock_code(code): [] for code in candidate_codes}
+            return SectorSnapshotLoadResult(
+                snapshot=empty_snapshot,
+                source="index_member_all:empty",
+                is_partial=True,
+                notes=["板块数据缺失，仅供人工判断：index_member_all 返回为空，技术候选池继续输出，板块强度条件已降级为参考项。"],
+            )
         if sw_daily_df is None or sw_daily_df.empty:
             logger.warning("sw_daily 返回为空，板块强度条件将无法命中")
-            return {normalize_stock_code(code): [] for code in candidate_codes}
-        return _build_sector_snapshot_from_tushare(
-            index_member_df=index_member_df,
-            sw_daily_df=sw_daily_df,
-            candidate_codes=candidate_codes,
-            trade_date=trade_date,
+            return SectorSnapshotLoadResult(
+                snapshot=empty_snapshot,
+                source=f"sw_daily:{trade_date}:empty",
+                is_partial=True,
+                notes=["板块数据缺失，仅供人工判断：sw_daily 返回为空，技术候选池继续输出，板块强度条件已降级为参考项。"],
+            )
+        return SectorSnapshotLoadResult(
+            snapshot=_build_sector_snapshot_from_tushare(
+                index_member_df=index_member_df,
+                sw_daily_df=sw_daily_df,
+                candidate_codes=candidate_codes,
+                trade_date=trade_date,
+            ),
+            source=f"sw_daily:{trade_date}",
         )
 
     def _select_technical_candidates(
         self,
         daily_history: pd.DataFrame,
-        latest_turnover: Dict[str, float],
+        latest_turnover: Union[Dict[str, float], TurnoverSnapshot],
         config: Optional[AshareRuleConfig] = None,
     ) -> List[str]:
         active_config = config or self.rule_config
@@ -1362,7 +1497,7 @@ class AshareRuleScreenerService:
         self,
         *,
         daily_history: pd.DataFrame,
-        latest_turnover: Dict[str, float],
+        latest_turnover: Union[Dict[str, float], TurnoverSnapshot],
         trade_date: str,
         config: AshareRuleConfig,
         stage_name: str,
@@ -1372,11 +1507,15 @@ class AshareRuleScreenerService:
             latest_turnover=latest_turnover,
             config=config,
         )
-        sector_snapshot = self._load_sector_snapshot(
+        sector_snapshot_result = _coerce_sector_snapshot_result(
+            self._load_sector_snapshot(
+                technical_candidate_codes,
+                trade_date,
+                config.min_sector_change_pct,
+            ),
             technical_candidate_codes,
-            trade_date,
-            config.min_sector_change_pct,
         )
+        sector_snapshot = sector_snapshot_result.snapshot
         scoped_history = daily_history[daily_history["code"].isin(technical_candidate_codes)]
         candidates = apply_selection_rules(
             daily_history=scoped_history,
@@ -1396,6 +1535,7 @@ class AshareRuleScreenerService:
             technical_candidate_codes=technical_candidate_codes,
             sector_snapshot=sector_snapshot,
             candidates=candidates,
+            data_notes=list(sector_snapshot_result.notes),
         )
 
     def run(
@@ -1409,7 +1549,7 @@ class AshareRuleScreenerService:
             latest_trade_date = trade_dates[0]
             stock_universe = self._load_stock_universe(min_list_date_cutoff=trade_dates[-1])
             daily_history = self._load_daily_history(trade_dates, stock_universe)
-            latest_turnover = self._load_latest_turnover(latest_trade_date)
+            latest_turnover = self._load_latest_turnover(latest_trade_date, trade_dates=trade_dates)
         except Exception as exc:
             if not self.rule_config.allow_open_data_fallback:
                 raise
@@ -1421,19 +1561,22 @@ class AshareRuleScreenerService:
         profile_name = "严格版"
         market_regime, market_regime_label = self._resolve_market_regime()
         dynamic_adjustments: List[DynamicAdjustment] = []
+        latest_turnover_snapshot = _coerce_turnover_snapshot(latest_turnover)
         profile_notes: List[str] = [
             "严格条件命中优先；严格档为 0 时，才会按市场状态进入动态放宽。",
             f"市场环境：{market_regime_label}",
         ]
+        _append_unique_notes(profile_notes, latest_turnover_snapshot.notes)
 
         strict_stage = self._evaluate_screening_stage(
             daily_history=daily_history,
-            latest_turnover=latest_turnover,
+            latest_turnover=latest_turnover_snapshot,
             trade_date=latest_trade_date,
             config=self.rule_config,
             stage_name="严格版",
         )
         final_stage = strict_stage
+        _append_unique_notes(profile_notes, strict_stage.data_notes)
         if strict_stage.candidates:
             grouped_candidates.full_hits = list(strict_stage.candidates)
         else:
@@ -1447,12 +1590,13 @@ class AshareRuleScreenerService:
                 )
                 relaxed_stage = self._evaluate_screening_stage(
                     daily_history=daily_history,
-                    latest_turnover=latest_turnover,
+                    latest_turnover=latest_turnover_snapshot,
                     trade_date=latest_trade_date,
                     config=active_config,
                     stage_name="动态放宽版",
                 )
                 final_stage = relaxed_stage
+                _append_unique_notes(profile_notes, relaxed_stage.data_notes)
                 if relaxed_stage.candidates:
                     grouped_candidates.relaxed_hits = list(relaxed_stage.candidates)
             else:
@@ -1461,8 +1605,10 @@ class AshareRuleScreenerService:
                     technical_candidate_codes=list(strict_stage.technical_candidate_codes),
                     sector_snapshot=dict(strict_stage.sector_snapshot),
                     candidates=[],
+                    data_notes=list(strict_stage.data_notes),
                 )
                 profile_notes.append("严格条件为 0，且已禁用动态放宽；继续输出技术候选池供人工精选。")
+                _append_unique_notes(profile_notes, relaxed_stage.data_notes)
 
             stage_for_technical_pool = relaxed_stage or strict_stage
             if grouped_candidates.is_empty() and stage_for_technical_pool.technical_candidate_codes:
@@ -1470,7 +1616,7 @@ class AshareRuleScreenerService:
                     daily_history=daily_history[
                         daily_history["code"].isin(stage_for_technical_pool.technical_candidate_codes)
                     ],
-                    latest_turnover=latest_turnover,
+                    latest_turnover=latest_turnover_snapshot,
                     sector_snapshot=stage_for_technical_pool.sector_snapshot,
                     config=stage_for_technical_pool.config,
                 )
@@ -1485,6 +1631,7 @@ class AshareRuleScreenerService:
                     profile_notes.append(
                         "技术候选池满足核心技术结构，板块强度仅作参考，不自动并入自选池。"
                     )
+                    _append_unique_notes(profile_notes, stage_for_technical_pool.data_notes)
                     logger.info("规则选股已回退到技术候选池: candidates=%s", len(technical_candidates))
 
         stock_pool_sync_candidates = list(grouped_candidates.full_hits) + list(grouped_candidates.relaxed_hits)
