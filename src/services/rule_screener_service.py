@@ -390,6 +390,10 @@ def _merge_stock_codes(existing_codes: Sequence[str], new_codes: Sequence[str]) 
     return merged
 
 
+def _count_sector_matched_codes(sector_snapshot: Dict[str, List[Dict[str, Any]]]) -> int:
+    return sum(1 for boards in sector_snapshot.values() if boards)
+
+
 def apply_selection_rules(
     daily_history: pd.DataFrame,
     latest_turnover: Dict[str, float],
@@ -580,7 +584,7 @@ class AshareRuleScreenerService:
             min_prior_rise_pct=max(15.0, self.rule_config.min_prior_rise_pct - 2.0),
             min_volume_ratio=max(1.2, self.rule_config.min_volume_ratio - 0.2),
             min_turnover_rate=max(4.0, self.rule_config.min_turnover_rate - 1.0),
-            min_sector_change_pct=max(1.0, self.rule_config.min_sector_change_pct - 1.0),
+            min_sector_change_pct=max(0.8, self.rule_config.min_sector_change_pct - 1.2),
             max_bias_ma5_pct=self.rule_config.max_bias_ma5_pct + 1.0,
             ai_review_limit=self.rule_config.ai_review_limit,
             sector_rank_top_n=self.rule_config.sector_rank_top_n,
@@ -588,11 +592,11 @@ class AshareRuleScreenerService:
             exclude_st=self.rule_config.exclude_st,
             allow_open_data_fallback=self.rule_config.allow_open_data_fallback,
             auto_relax_if_empty=False,
-            abc_min_pullback_pct=max(4.0, self.rule_config.abc_min_pullback_pct - 1.0),
-            abc_min_rebound_pct=max(2.0, self.rule_config.abc_min_rebound_pct - 1.0),
-            abc_min_c_leg_pct=max(1.5, self.rule_config.abc_min_c_leg_pct - 0.5),
-            abc_min_c_retention_ratio=max(0.85, self.rule_config.abc_min_c_retention_ratio - 0.05),
-            abc_rebreak_buffer_pct=-0.2,
+            abc_min_pullback_pct=max(3.5, self.rule_config.abc_min_pullback_pct - 1.5),
+            abc_min_rebound_pct=max(1.5, self.rule_config.abc_min_rebound_pct - 1.5),
+            abc_min_c_leg_pct=max(1.0, self.rule_config.abc_min_c_leg_pct - 1.0),
+            abc_min_c_retention_ratio=max(0.82, self.rule_config.abc_min_c_retention_ratio - 0.08),
+            abc_rebreak_buffer_pct=-0.4,
         )
 
     def _load_trade_dates(self) -> List[str]:
@@ -942,6 +946,14 @@ class AshareRuleScreenerService:
             sector_snapshot=sector_snapshot,
             config=active_config,
         )
+        strict_technical_count = len(technical_candidate_codes)
+        strict_sector_count = _count_sector_matched_codes(sector_snapshot)
+        logger.info(
+            "规则选股严格版统计: technical=%s, sector=%s, final=%s",
+            strict_technical_count,
+            strict_sector_count,
+            len(candidates),
+        )
 
         if not candidates and self.rule_config.auto_relax_if_empty:
             active_config = self._build_relaxed_rule_config()
@@ -949,7 +961,8 @@ class AshareRuleScreenerService:
             profile_notes = [
                 "严格条件当日筛出 0 只，已自动切换到轻度放宽版。",
                 f"放宽项：前高前涨幅 >= {active_config.min_prior_rise_pct:.1f}%，量比 >= {active_config.min_volume_ratio:.1f}，换手率 >= {active_config.min_turnover_rate:.1f}%，板块涨幅 >= {active_config.min_sector_change_pct:.1f}%，MA5 乖离率 < {active_config.max_bias_ma5_pct:.1f}%。",
-                "ABC 调整识别同步做了轻微放宽；该名单是候选观察池，不等于直接买入信号。",
+                "ABC 调整识别与板块强度阈值同步做了轻微放宽；该名单是候选观察池，不等于直接买入信号。",
+                f"严格版诊断：技术形态命中 {strict_technical_count} 只，板块强度命中 {strict_sector_count} 只，最终入选 {len(candidates)} 只。",
             ]
             technical_candidate_codes = []
             prepared = _prepare_indicator_frame(daily_history)
@@ -972,6 +985,17 @@ class AshareRuleScreenerService:
                 latest_turnover=latest_turnover,
                 sector_snapshot=sector_snapshot,
                 config=active_config,
+            )
+            relaxed_technical_count = len(technical_candidate_codes)
+            relaxed_sector_count = _count_sector_matched_codes(sector_snapshot)
+            profile_notes.append(
+                f"轻度放宽版诊断：技术形态命中 {relaxed_technical_count} 只，板块强度命中 {relaxed_sector_count} 只，最终入选 {len(candidates)} 只。"
+            )
+            logger.info(
+                "规则选股轻度放宽版统计: technical=%s, sector=%s, final=%s",
+                relaxed_technical_count,
+                relaxed_sector_count,
+                len(candidates),
             )
 
         ai_review_lines: List[str] = []
