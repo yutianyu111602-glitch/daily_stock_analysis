@@ -1,10 +1,10 @@
 name: 每日股票分析
 
 on:
-  # 定时触发 - 工作日北京时间 11:30 与 15:10
+  # 定时触发 - 工作日北京时间 11:00 与 14:30
   schedule:
-    - cron: '30 3 * * 1-5'     # 周一到周五，UTC 03:30 = 北京时间 11:30
-    - cron: '10 7 * * 1-5'     # 周一到周五，UTC 07:10 = 北京时间 15:10（A股收盘后）
+    - cron: '0 3 * * 1-5'      # 周一到周五，UTC 03:00 = 北京时间 11:00
+    - cron: '30 6 * * 1-5'     # 周一到周五，UTC 06:30 = 北京时间 14:30
   
   # 手动触发
   workflow_dispatch:
@@ -228,14 +228,11 @@ jobs:
 
           if [ "$SESSION_PROFILE" = "auto" ]; then
             case "$EVENT_SCHEDULE" in
-              "30 3 * * 1-5")
+              "0 3 * * 1-5"|"30 6 * * 1-5")
                 SESSION_PROFILE="intraday"
                 ;;
-              "10 7 * * 1-5")
-                SESSION_PROFILE="close"
-                ;;
               *)
-                SESSION_PROFILE="close"
+                SESSION_PROFILE="intraday"
                 ;;
             esac
           fi
