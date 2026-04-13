@@ -129,6 +129,64 @@ class TestReportRenderer(unittest.TestCase):
         self.assertIn("Market Snapshot", out)
         self.assertIn("Volume Ratio", out)
 
+    def test_render_markdown_full_avoids_markdown_tables_for_cross_channel_readability(self) -> None:
+        """Detailed markdown report should avoid markdown tables so chat apps keep alignment."""
+        r = _make_result()
+        r.market_snapshot = {
+            "close": "17.83",
+            "prev_close": "17.64",
+            "open": "17.39",
+            "high": "18.43",
+            "low": "17.34",
+            "pct_chg": "1.08%",
+            "change_amount": "0.19",
+            "amplitude": "6.18%",
+            "volume": "1877.02万股",
+            "amount": "3.36亿元",
+            "price": "17.83",
+            "volume_ratio": "1.62",
+            "turnover_rate": "4.77%",
+            "source": "tencent",
+        }
+        r.dashboard = {
+            "core_conclusion": {
+                "one_sentence": "建议小仓买入，关注短期趋势。",
+                "position_advice": {
+                    "no_position": "在17.50元附近小仓买入。",
+                    "has_position": "保持持仓，关注止损位。",
+                },
+            },
+            "data_perspective": {
+                "price_position": {
+                    "current_price": "17.83",
+                    "ma5": "17.28",
+                    "ma10": "16.91",
+                    "ma20": "16.62",
+                    "bias_ma5": "3.18",
+                    "bias_status": "警戒",
+                    "support_level": "17.28",
+                    "resistance_level": "18.43",
+                }
+            },
+            "battle_plan": {
+                "sniper_points": {
+                    "ideal_buy": "17.50",
+                    "secondary_buy": "17.20",
+                    "stop_loss": "16.90",
+                    "take_profit": "18.60",
+                }
+            },
+        }
+
+        out = render("markdown", [r], summary_only=False)
+
+        self.assertIsNotNone(out)
+        self.assertNotIn("| 收盘 |", out)
+        self.assertNotIn("| Price Metrics |", out)
+        self.assertIn("- 收盘/昨收/开盘：17.83 / 17.64 / 17.39", out)
+        self.assertIn("- 当前价/MA5/MA10/MA20：17.83 / 17.28 / 16.91 / 16.62", out)
+        self.assertIn("- 理想买入点：17.50", out)
+
     def test_render_unknown_platform_returns_none(self) -> None:
         """Unknown platform returns None (caller fallback)."""
         r = _make_result()

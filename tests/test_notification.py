@@ -293,6 +293,75 @@ class TestNotificationServiceReportGeneration(unittest.TestCase):
         self.assertNotIn("消息面", out)
 
     @mock.patch("src.notification.get_config")
+    def test_generate_dashboard_report_fallback_avoids_markdown_tables(
+        self, mock_get_config: mock.MagicMock
+    ):
+        mock_get_config.return_value = _make_config(report_renderer_enabled=False, report_language="zh")
+        service = NotificationService()
+        result = AnalysisResult(
+            code="300490",
+            name="华自科技",
+            sentiment_score=75,
+            trend_prediction="看多",
+            operation_advice="买入",
+            analysis_summary="建议小仓买入，关注短期趋势。",
+            decision_type="buy",
+            dashboard={
+                "core_conclusion": {
+                    "one_sentence": "建议小仓买入，关注短期趋势。",
+                    "position_advice": {
+                        "no_position": "在17.50元附近小仓买入。",
+                        "has_position": "保持持仓，关注止损位。",
+                    },
+                },
+                "data_perspective": {
+                    "price_position": {
+                        "current_price": "17.83",
+                        "ma5": "17.28",
+                        "ma10": "16.91",
+                        "ma20": "16.62",
+                        "bias_ma5": "3.18",
+                        "bias_status": "警戒",
+                        "support_level": "17.28",
+                        "resistance_level": "18.43",
+                    }
+                },
+                "battle_plan": {
+                    "sniper_points": {
+                        "ideal_buy": "17.50",
+                        "secondary_buy": "17.20",
+                        "stop_loss": "16.90",
+                        "take_profit": "18.60",
+                    }
+                },
+            },
+        )
+        result.market_snapshot = {
+            "close": "17.83",
+            "prev_close": "17.64",
+            "open": "17.39",
+            "high": "18.43",
+            "low": "17.34",
+            "pct_chg": "1.08%",
+            "change_amount": "0.19",
+            "amplitude": "6.18%",
+            "volume": "1877.02万股",
+            "amount": "3.36亿元",
+            "price": "17.83",
+            "volume_ratio": "1.62",
+            "turnover_rate": "4.77%",
+            "source": "tencent",
+        }
+
+        out = service.generate_dashboard_report([result], report_date="2026-04-13")
+
+        self.assertNotIn("| 收盘 |", out)
+        self.assertNotIn("| 持仓情况 |", out)
+        self.assertIn("- 🆕 空仓者：在17.50元附近小仓买入。", out)
+        self.assertIn("- 收盘/昨收/开盘：17.83 / 17.64 / 17.39", out)
+        self.assertIn("- 当前价/MA5/MA10/MA20：17.83 / 17.28 / 16.91 / 16.62", out)
+
+    @mock.patch("src.notification.get_config")
     def test_generate_single_stock_report_localizes_english_fallback(self, mock_get_config: mock.MagicMock):
         mock_get_config.return_value = _make_config(report_renderer_enabled=False, report_language="en")
         service = NotificationService()

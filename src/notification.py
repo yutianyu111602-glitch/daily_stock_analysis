@@ -821,8 +821,8 @@ class NotificationService(
         report_lines = [
             f"# 🎯 {report_date} {labels['dashboard_title']}",
             "",
-            f"> {labels['analyzed_prefix']} **{len(results)}** {labels['stock_unit']} | "
-            f"🟢{labels['buy_label']}:{buy_count} 🟡{labels['watch_label']}:{hold_count} 🔴{labels['sell_label']}:{sell_count}",
+            f"> {labels['analyzed_prefix']} **{len(results)}** {labels['stock_unit']} · "
+            f"🟢{labels['buy_label']}:{buy_count} · 🟡{labels['watch_label']}:{hold_count} · 🔴{labels['sell_label']}:{sell_count}",
             "",
         ]
 
@@ -837,9 +837,9 @@ class NotificationService(
                 display_name = self._get_display_name(r, report_language)
                 report_lines.append(
                     f"{signal_emoji} **{display_name}({r.code})**: "
-                    f"{localize_operation_advice(r.operation_advice, report_language)} | "
-                    f"{labels['score_label']} {r.sentiment_score} | "
-                    f"{localize_trend_prediction(r.trend_prediction, report_language)}"
+                        f"{localize_operation_advice(r.operation_advice, report_language)} · "
+                        f"{labels['score_label']} {r.sentiment_score} · "
+                        f"{localize_trend_prediction(r.trend_prediction, report_language)}"
                 )
             report_lines.extend([
                 "",
@@ -903,7 +903,7 @@ class NotificationService(
                 report_lines.extend([
                     f"### 📌 {labels['core_conclusion_heading']}",
                     "",
-                    f"**{signal_emoji} {signal_text}** | {localize_trend_prediction(result.trend_prediction, report_language)}",
+                    f"**{signal_emoji} {signal_text}** · {localize_trend_prediction(result.trend_prediction, report_language)}",
                     "",
                     f"> **{labels['one_sentence_label']}**: {one_sentence}",
                     "",
@@ -913,10 +913,8 @@ class NotificationService(
                 # 持仓分类建议
                 if pos_advice:
                     report_lines.extend([
-                        f"| {labels['position_status_label']} | {labels['action_advice_label']} |",
-                        "|---------|---------|",
-                        f"| 🆕 **{labels['no_position_label']}** | {pos_advice.get('no_position', localize_operation_advice(result.operation_advice, report_language))} |",
-                        f"| 💼 **{labels['has_position_label']}** | {pos_advice.get('has_position', labels['continue_holding'])} |",
+                        f"- 🆕 {labels['no_position_label']}：{pos_advice.get('no_position', localize_operation_advice(result.operation_advice, report_language))}",
+                        f"- 💼 {labels['has_position_label']}：{pos_advice.get('has_position', labels['continue_holding'])}",
                         "",
                     ])
 
@@ -942,39 +940,37 @@ class NotificationService(
                             else f"❌ {labels['no_label']}"
                         )
                         report_lines.extend([
-                            f"**{labels['ma_alignment_label']}**: {trend_data.get('ma_alignment', 'N/A')} | "
-                            f"{labels['bullish_alignment_label']}: {is_bullish} | "
-                            f"{labels['trend_strength_label']}: {trend_data.get('trend_score', 'N/A')}/100",
+                            f"- {labels['ma_alignment_label']}：{trend_data.get('ma_alignment', 'N/A')}",
+                            f"- {labels['bullish_alignment_label']}：{is_bullish}",
+                            f"- {labels['trend_strength_label']}：{trend_data.get('trend_score', 'N/A')}/100",
                             "",
                         ])
                     # 价格位置
                     if price_data:
                         bias_status = price_data.get('bias_status', 'N/A')
                         report_lines.extend([
-                            f"| {labels['price_metrics_label']} | {labels['current_price_label']} |",
-                            "|---------|------|",
-                            f"| {labels['current_price_label']} | {price_data.get('current_price', 'N/A')} |",
-                            f"| {labels['ma5_label']} | {price_data.get('ma5', 'N/A')} |",
-                            f"| {labels['ma10_label']} | {price_data.get('ma10', 'N/A')} |",
-                            f"| {labels['ma20_label']} | {price_data.get('ma20', 'N/A')} |",
-                            f"| {labels['bias_ma5_label']} | {price_data.get('bias_ma5', 'N/A')}% {bias_status} |",
-                            f"| {labels['support_level_label']} | {price_data.get('support_level', 'N/A')} |",
-                            f"| {labels['resistance_level_label']} | {price_data.get('resistance_level', 'N/A')} |",
+                            f"- {labels['current_price_label']}/{labels['ma5_label']}/{labels['ma10_label']}/{labels['ma20_label']}："
+                            f"{price_data.get('current_price', 'N/A')} / {price_data.get('ma5', 'N/A')} / "
+                            f"{price_data.get('ma10', 'N/A')} / {price_data.get('ma20', 'N/A')}",
+                            f"- {labels['bias_ma5_label']}：{price_data.get('bias_ma5', 'N/A')}% {bias_status}",
+                            f"- {labels['support_level_label']}/{labels['resistance_level_label']}："
+                            f"{price_data.get('support_level', 'N/A')} / {price_data.get('resistance_level', 'N/A')}",
                             "",
                         ])
                     # 量能分析
                     if vol_data:
                         report_lines.extend([
-                            f"**{labels['volume_label']}**: {labels['volume_ratio_label']} {vol_data.get('volume_ratio', 'N/A')} ({vol_data.get('volume_status', '')}) | "
-                            f"{labels['turnover_rate_label']} {vol_data.get('turnover_rate', 'N/A')}%",
-                            f"💡 *{vol_data.get('volume_meaning', '')}*",
+                            f"- {labels['volume_ratio_label']}/{labels['turnover_rate_label']}："
+                            f"{vol_data.get('volume_ratio', 'N/A')} ({vol_data.get('volume_status', '')}) / "
+                            f"{vol_data.get('turnover_rate', 'N/A')}%",
+                            f"- {labels['volume_label']}解读：{vol_data.get('volume_meaning', '')}",
                             "",
                         ])
                     # 筹码结构
                     if chip_data:
                         chip_health = localize_chip_health(chip_data.get('chip_health', 'N/A'), report_language)
                         report_lines.extend([
-                            f"**{labels['chip_label']}**: {chip_data.get('profit_ratio', 'N/A')} | {chip_data.get('avg_cost', 'N/A')} | "
+                            f"- {labels['chip_label']}：{chip_data.get('profit_ratio', 'N/A')} / {chip_data.get('avg_cost', 'N/A')} / "
                             f"{chip_data.get('concentration', 'N/A')} {chip_health}",
                             "",
                         ])
@@ -992,12 +988,10 @@ class NotificationService(
                         report_lines.extend([
                             f"**📍 {labels['action_points_heading']}**",
                             "",
-                            f"| {labels['action_points_heading']} | {labels['current_price_label']} |",
-                            "|---------|------|",
-                            f"| 🎯 {labels['ideal_buy_label']} | {self._clean_sniper_value(sniper.get('ideal_buy', 'N/A'))} |",
-                            f"| 🔵 {labels['secondary_buy_label']} | {self._clean_sniper_value(sniper.get('secondary_buy', 'N/A'))} |",
-                            f"| 🛑 {labels['stop_loss_label']} | {self._clean_sniper_value(sniper.get('stop_loss', 'N/A'))} |",
-                            f"| 🎊 {labels['take_profit_label']} | {self._clean_sniper_value(sniper.get('take_profit', 'N/A'))} |",
+                            f"- {labels['ideal_buy_label']}：{self._clean_sniper_value(sniper.get('ideal_buy', 'N/A'))}",
+                            f"- {labels['secondary_buy_label']}：{self._clean_sniper_value(sniper.get('secondary_buy', 'N/A'))}",
+                            f"- {labels['stop_loss_label']}：{self._clean_sniper_value(sniper.get('stop_loss', 'N/A'))}",
+                            f"- {labels['take_profit_label']}：{self._clean_sniper_value(sniper.get('take_profit', 'N/A'))}",
                             "",
                         ])
                     # 仓位策略
@@ -1514,23 +1508,22 @@ class NotificationService(
         lines.extend([
             f"### 📈 {labels['market_snapshot_heading']}",
             "",
-            f"| {labels['close_label']} | {labels['prev_close_label']} | {labels['open_label']} | {labels['high_label']} | {labels['low_label']} | {labels['change_pct_label']} | {labels['change_amount_label']} | {labels['amplitude_label']} | {labels['volume_label']} | {labels['amount_label']} |",
-            "|------|------|------|------|------|-------|-------|------|--------|--------|",
-            f"| {snapshot.get('close', 'N/A')} | {snapshot.get('prev_close', 'N/A')} | "
-            f"{snapshot.get('open', 'N/A')} | {snapshot.get('high', 'N/A')} | "
-            f"{snapshot.get('low', 'N/A')} | {snapshot.get('pct_chg', 'N/A')} | "
-            f"{snapshot.get('change_amount', 'N/A')} | {snapshot.get('amplitude', 'N/A')} | "
-            f"{snapshot.get('volume', 'N/A')} | {snapshot.get('amount', 'N/A')} |",
+            f"- {labels['close_label']}/{labels['prev_close_label']}/{labels['open_label']}："
+            f"{snapshot.get('close', 'N/A')} / {snapshot.get('prev_close', 'N/A')} / {snapshot.get('open', 'N/A')}",
+            f"- {labels['high_label']}/{labels['low_label']}："
+            f"{snapshot.get('high', 'N/A')} / {snapshot.get('low', 'N/A')}",
+            f"- {labels['change_pct_label']}/{labels['change_amount_label']}/{labels['amplitude_label']}："
+            f"{snapshot.get('pct_chg', 'N/A')} / {snapshot.get('change_amount', 'N/A')} / {snapshot.get('amplitude', 'N/A')}",
+            f"- {labels['volume_label']}/{labels['amount_label']}："
+            f"{snapshot.get('volume', 'N/A')} / {snapshot.get('amount', 'N/A')}",
         ])
 
         if "price" in snapshot:
             display_source = self._get_source_display_name(snapshot.get('source', 'N/A'), report_language)
             lines.extend([
-                "",
-                f"| {labels['current_price_label']} | {labels['volume_ratio_label']} | {labels['turnover_rate_label']} | {labels['source_label']} |",
-                "|-------|------|--------|----------|",
-                f"| {snapshot.get('price', 'N/A')} | {snapshot.get('volume_ratio', 'N/A')} | "
-                f"{snapshot.get('turnover_rate', 'N/A')} | {display_source} |",
+                f"- {labels['current_price_label']}/{labels['volume_ratio_label']}/{labels['turnover_rate_label']}："
+                f"{snapshot.get('price', 'N/A')} / {snapshot.get('volume_ratio', 'N/A')} / {snapshot.get('turnover_rate', 'N/A')}",
+                f"- {labels['source_label']}：{display_source}",
             ])
 
         lines.append("")
