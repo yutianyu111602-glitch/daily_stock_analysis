@@ -109,6 +109,7 @@ jobs:
           RULE_SCREENER_DISABLE_GEMINI: ${{ vars.RULE_SCREENER_DISABLE_GEMINI || 'true' }}
           RULE_SCREENER_DISABLE_ANTHROPIC: ${{ vars.RULE_SCREENER_DISABLE_ANTHROPIC || 'true' }}
           RULE_SCREENER_CACHE_DIR: .cache/rule_screener_v2/tushare
+          RULE_SCREENER_DEBUG_SECTOR: true
         run: |
           ARGS=""
           if [ "${{ github.event.inputs.ai_review || 'true' }}" != "true" ]; then

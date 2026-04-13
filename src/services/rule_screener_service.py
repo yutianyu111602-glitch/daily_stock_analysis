@@ -394,6 +394,15 @@ def _count_sector_matched_codes(sector_snapshot: Dict[str, List[Dict[str, Any]]]
     return sum(1 for boards in sector_snapshot.values() if boards)
 
 
+def _sample_records(df: Optional[pd.DataFrame], columns: Sequence[str], limit: int = 3) -> List[Dict[str, Any]]:
+    if df is None or df.empty:
+        return []
+    existing = [column for column in columns if column in df.columns]
+    if not existing:
+        return []
+    return df.loc[:, existing].head(limit).to_dict(orient="records")
+
+
 def apply_selection_rules(
     daily_history: pd.DataFrame,
     latest_turnover: Dict[str, float],
@@ -806,6 +815,37 @@ class AshareRuleScreenerService:
             trade_date=trade_date,
             fields="ts_code,name,pct_change",
         )
+        debug_sector = os.getenv("RULE_SCREENER_DEBUG_SECTOR", "false").lower() == "true"
+        if debug_sector:
+            member_l1_codes = (
+                set(index_member_df["l1_code"].dropna().astype(str).tolist())
+                if index_member_df is not None and not index_member_df.empty and "l1_code" in index_member_df.columns
+                else set()
+            )
+            sw_sector_codes = (
+                set(sw_daily_df["ts_code"].dropna().astype(str).tolist())
+                if sw_daily_df is not None and not sw_daily_df.empty and "ts_code" in sw_daily_df.columns
+                else set()
+            )
+            overlap_codes = sorted(member_l1_codes & sw_sector_codes)[:5]
+            logger.info(
+                "板块数据诊断: candidates=%s trade_date=%s threshold=%.2f index_member_rows=%s sw_daily_rows=%s member_l1=%s sw_codes=%s overlap=%s",
+                len(candidate_codes),
+                trade_date,
+                sector_threshold,
+                0 if index_member_df is None else len(index_member_df),
+                0 if sw_daily_df is None else len(sw_daily_df),
+                len(member_l1_codes),
+                len(sw_sector_codes),
+                overlap_codes,
+            )
+            logger.info(
+                "板块数据样例: index_member_cols=%s sw_daily_cols=%s index_member_sample=%s sw_daily_sample=%s",
+                [] if index_member_df is None else list(index_member_df.columns),
+                [] if sw_daily_df is None else list(sw_daily_df.columns),
+                _sample_records(index_member_df, ["ts_code", "l1_code", "l1_name", "in_date", "out_date"]),
+                _sample_records(sw_daily_df, ["ts_code", "name", "pct_change"]),
+            )
         if index_member_df is None or index_member_df.empty:
             logger.warning("index_member_all 返回为空，板块强度条件将无法命中")
             return {normalize_stock_code(code): [] for code in candidate_codes}
