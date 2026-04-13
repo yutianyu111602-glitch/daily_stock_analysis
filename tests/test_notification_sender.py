@@ -626,6 +626,27 @@ class TestTelegramSender(unittest.TestCase):
         self.assertFalse(result)
         self.assertEqual(mock_post.call_count, 2)
 
+    def test_build_telegram_chunks_splits_single_long_line_by_actual_length(self):
+        cfg = _config(telegram_bot_token="BOT", telegram_chat_id="CHAT")
+        sender = TelegramSender(cfg)
+
+        content = "[" * 120
+        chunks = sender._build_telegram_chunks(content, max_length=40)
+
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(sender._telegram_text_length(chunk) <= 40 for chunk in chunks))
+
+    @mock.patch.object(TelegramSender, "_send_telegram_message", return_value=True)
+    def test_send_to_telegram_chunks_when_markdown_escaping_pushes_length_over_limit(self, mock_send):
+        cfg = _config(telegram_bot_token="BOT", telegram_chat_id="CHAT")
+        sender = TelegramSender(cfg)
+
+        content = "[" * 3000  # 原文小于 4096，但 Telegram 转义后会超过限制
+        result = sender.send_to_telegram(content)
+
+        self.assertTrue(result)
+        self.assertGreater(mock_send.call_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

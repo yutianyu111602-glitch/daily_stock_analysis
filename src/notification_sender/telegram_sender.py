@@ -69,8 +69,8 @@ class TelegramSender:
             
             # Telegram 消息最大长度 4096 字符
             max_length = 4096
-            
-            if len(content) <= max_length:
+
+            if self._telegram_text_length(content) <= max_length:
                 # 单条消息发送
                 return self._send_telegram_message(api_url, chat_id, content, message_thread_id)
             else:
@@ -204,41 +204,61 @@ class TelegramSender:
     
     def _send_telegram_chunked(self, api_url: str, chat_id: str, content: str, max_length: int, message_thread_id: Optional[str] = None) -> bool:
         """分段发送长 Telegram 消息"""
-        # 按段落分割
-        sections = content.split("\n---\n")
-        
-        current_chunk = []
-        current_length = 0
         all_success = True
-        chunk_index = 1
-        
-        for section in sections:
-            section_length = len(section) + 5  # +5 for "\n---\n"
-            
-            if current_length + section_length > max_length:
-                # 发送当前块
-                if current_chunk:
-                    chunk_content = "\n---\n".join(current_chunk)
-                    logger.info(f"发送 Telegram 消息块 {chunk_index}...")
-                    if not self._send_telegram_message(api_url, chat_id, chunk_content, message_thread_id):
-                        all_success = False
-                    chunk_index += 1
-                
-                # 重置
-                current_chunk = [section]
-                current_length = section_length
-            else:
-                current_chunk.append(section)
-                current_length += section_length
-        
-        # 发送最后一块
-        if current_chunk:
-            chunk_content = "\n---\n".join(current_chunk)
+        for chunk_index, chunk_content in enumerate(self._build_telegram_chunks(content, max_length), start=1):
             logger.info(f"发送 Telegram 消息块 {chunk_index}...")
             if not self._send_telegram_message(api_url, chat_id, chunk_content, message_thread_id):
                 all_success = False
-                
+
         return all_success
+
+    def _telegram_text_length(self, text: str) -> int:
+        """返回 Telegram Markdown 转换后的实际长度。"""
+        return len(self._convert_to_telegram_markdown(text))
+
+    def _build_telegram_chunks(self, content: str, max_length: int) -> list[str]:
+        """按 Telegram 实际可发送长度切分消息。"""
+        if self._telegram_text_length(content) <= max_length:
+            return [content]
+
+        chunks: list[str] = []
+        current = ""
+
+        for line in content.splitlines(keepends=True):
+            for segment in self._split_long_telegram_line(line, max_length):
+                candidate = f"{current}{segment}"
+                if current and self._telegram_text_length(candidate) > max_length:
+                    chunks.append(current.rstrip())
+                    current = segment
+                else:
+                    current = candidate
+
+        if current.strip():
+            chunks.append(current.rstrip())
+
+        return chunks or [content[:max_length]]
+
+    def _split_long_telegram_line(self, line: str, max_length: int) -> list[str]:
+        """切分单行超长内容，避免单段过长导致 Telegram 400。"""
+        if self._telegram_text_length(line) <= max_length:
+            return [line]
+
+        parts: list[str] = []
+        remaining = line
+        while remaining:
+            low, high = 1, len(remaining)
+            best = 1
+            while low <= high:
+                mid = (low + high) // 2
+                candidate = remaining[:mid]
+                if self._telegram_text_length(candidate) <= max_length:
+                    best = mid
+                    low = mid + 1
+                else:
+                    high = mid - 1
+            parts.append(remaining[:best])
+            remaining = remaining[best:]
+        return parts
 
     def _send_telegram_photo(self, image_bytes: bytes) -> bool:
         """Send image via Telegram sendPhoto API (Issue #289)."""
