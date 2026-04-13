@@ -1,0 +1,109 @@
+name: A股规则选股
+
+on:
+  schedule:
+    - cron: "35 7 * * 1-5" # 北京时间 15:35，等日线收盘数据稳定后推送
+  workflow_dispatch:
+    inputs:
+      ai_review:
+        description: "是否启用 AI 复核"
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: ashare-rule-screener
+  cancel-in-progress: false
+
+jobs:
+  screen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v5
+
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: 安装依赖
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 恢复规则选股缓存
+        uses: actions/cache@v4
+        with:
+          path: .cache/rule_screener
+          key: ${{ runner.os }}-rule-screener-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-rule-screener-${{ github.ref_name }}-
+
+      - name: 执行规则选股
+        env:
+          AIHUBMIX_KEY: ${{ secrets.AIHUBMIX_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          LITELLM_MODEL: ${{ vars.RULE_SCREENER_LITELLM_MODEL || 'gemini/gemini-2.0-flash' }}
+          LITELLM_FALLBACK_MODELS: ${{ vars.RULE_SCREENER_LITELLM_FALLBACK_MODELS || 'openai/gpt-5-chat-latest' }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || secrets.GEMINI_MODEL || 'gemini-2.0-flash' }}
+          GEMINI_MODEL_FALLBACK: ${{ vars.GEMINI_MODEL_FALLBACK || secrets.GEMINI_MODEL_FALLBACK || 'gemini-2.0-flash' }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL || secrets.OPENAI_BASE_URL }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || secrets.OPENAI_MODEL }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL || secrets.ANTHROPIC_MODEL || 'claude-3-5-sonnet-20241022' }}
+
+          TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+          TICKFLOW_API_KEY: ${{ secrets.TICKFLOW_API_KEY }}
+
+          ANSPIRE_API_KEYS: ${{ secrets.ANSPIRE_API_KEYS }}
+          BOCHA_API_KEYS: ${{ secrets.BOCHA_API_KEYS }}
+          TAVILY_API_KEYS: ${{ secrets.TAVILY_API_KEYS }}
+          SERPAPI_API_KEYS: ${{ secrets.SERPAPI_API_KEYS }}
+          BRAVE_API_KEYS: ${{ secrets.BRAVE_API_KEYS }}
+          MINIMAX_API_KEYS: ${{ secrets.MINIMAX_API_KEYS }}
+          SEARXNG_BASE_URLS: ${{ secrets.SEARXNG_BASE_URLS }}
+          SEARXNG_PUBLIC_INSTANCES_ENABLED: ${{ vars.SEARXNG_PUBLIC_INSTANCES_ENABLED || secrets.SEARXNG_PUBLIC_INSTANCES_ENABLED }}
+
+          WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL }}
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_MESSAGE_THREAD_ID: ${{ secrets.TELEGRAM_MESSAGE_THREAD_ID }}
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+          SERVERCHAN3_SENDKEY: ${{ secrets.SERVERCHAN3_SENDKEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          ASTRBOT_URL: ${{ secrets.ASTRBOT_URL }}
+          ASTRBOT_TOKEN: ${{ secrets.ASTRBOT_TOKEN }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+
+          REPORT_LANGUAGE: ${{ vars.REPORT_LANGUAGE || secrets.REPORT_LANGUAGE || 'zh' }}
+          REPORT_DECISION_STYLE: ${{ vars.REPORT_DECISION_STYLE || secrets.REPORT_DECISION_STYLE || 'conservative' }}
+          NEWS_STRATEGY_PROFILE: ${{ vars.NEWS_STRATEGY_PROFILE || secrets.NEWS_STRATEGY_PROFILE || 'short' }}
+          REALTIME_SOURCE_PRIORITY: ${{ vars.REALTIME_SOURCE_PRIORITY || 'tushare,tencent,akshare_sina,efinance,akshare_em' }}
+          RULE_SCREENER_AI_REVIEW_LIMIT: ${{ vars.RULE_SCREENER_AI_REVIEW_LIMIT || '8' }}
+          RULE_SCREENER_LOOKBACK_DAYS: ${{ vars.RULE_SCREENER_LOOKBACK_DAYS || '60' }}
+          RULE_SCREENER_ABC_WINDOW_DAYS: ${{ vars.RULE_SCREENER_ABC_WINDOW_DAYS || '20' }}
+          RULE_SCREENER_SECTOR_TOP_N: ${{ vars.RULE_SCREENER_SECTOR_TOP_N || '80' }}
+          RULE_SCREENER_EXCLUDE_ST: ${{ vars.RULE_SCREENER_EXCLUDE_ST || 'true' }}
+          RULE_SCREENER_ALLOW_FALLBACK: ${{ vars.RULE_SCREENER_ALLOW_FALLBACK || 'false' }}
+          RULE_SCREENER_AUTO_RELAX_IF_EMPTY: ${{ vars.RULE_SCREENER_AUTO_RELAX_IF_EMPTY || 'true' }}
+          RULE_SCREENER_PREFER_AIHUBMIX: ${{ vars.RULE_SCREENER_PREFER_AIHUBMIX || 'false' }}
+          RULE_SCREENER_AIHUBMIX_MODEL: ${{ vars.RULE_SCREENER_AIHUBMIX_MODEL || 'gpt-5-chat-latest' }}
+          RULE_SCREENER_GEMINI_FALLBACK_MODEL: ${{ vars.RULE_SCREENER_GEMINI_FALLBACK_MODEL || 'gemini-2.0-flash' }}
+          RULE_SCREENER_DISABLE_GEMINI: ${{ vars.RULE_SCREENER_DISABLE_GEMINI || 'false' }}
+          RULE_SCREENER_DISABLE_ANTHROPIC: ${{ vars.RULE_SCREENER_DISABLE_ANTHROPIC || 'true' }}
+          RULE_SCREENER_CACHE_DIR: .cache/rule_screener/tushare
+        run: |
+          ARGS=""
+          if [ "${{ github.event.inputs.ai_review || 'true' }}" != "true" ]; then
+            ARGS="$ARGS --no-ai-review"
+          fi
+          python scripts/run_rule_screener.py $ARGS

@@ -26,5 +26,33 @@ class DailyAnalysisWorkflowTestCase(unittest.TestCase):
         self.assertNotIn('NEWS_STRATEGY_PROFILE="ultra_short"', workflow)
 
 
+class RuleScreenerWorkflowTestCase(unittest.TestCase):
+    def test_rule_screener_workflow_exists_and_maps_required_env(self) -> None:
+        workflow_path = (
+            Path(__file__).resolve().parents[1]
+            / ".github"
+            / "workflows"
+            / "rule_screener.yml"
+        )
+        workflow = workflow_path.read_text(encoding="utf-8")
+
+        self.assertIn("TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}", workflow)
+        self.assertIn("AIHUBMIX_KEY: ${{ secrets.AIHUBMIX_KEY }}", workflow)
+        self.assertIn("SERVERCHAN3_SENDKEY: ${{ secrets.SERVERCHAN3_SENDKEY }}", workflow)
+        self.assertIn("RULE_SCREENER_EXCLUDE_ST: ${{ vars.RULE_SCREENER_EXCLUDE_ST || 'true' }}", workflow)
+        self.assertIn("RULE_SCREENER_ALLOW_FALLBACK: ${{ vars.RULE_SCREENER_ALLOW_FALLBACK || 'false' }}", workflow)
+        self.assertIn("RULE_SCREENER_AUTO_RELAX_IF_EMPTY: ${{ vars.RULE_SCREENER_AUTO_RELAX_IF_EMPTY || 'true' }}", workflow)
+        self.assertIn("RULE_SCREENER_DISABLE_GEMINI: ${{ vars.RULE_SCREENER_DISABLE_GEMINI || 'false' }}", workflow)
+        self.assertIn("RULE_SCREENER_CACHE_DIR: .cache/rule_screener/tushare", workflow)
+        self.assertIn("LITELLM_MODEL: ${{ vars.RULE_SCREENER_LITELLM_MODEL || 'gemini/gemini-2.0-flash' }}", workflow)
+        self.assertIn("LITELLM_FALLBACK_MODELS: ${{ vars.RULE_SCREENER_LITELLM_FALLBACK_MODELS || 'openai/gpt-5-chat-latest' }}", workflow)
+        self.assertIn("GEMINI_MODEL: ${{ vars.GEMINI_MODEL || secrets.GEMINI_MODEL || 'gemini-2.0-flash' }}", workflow)
+        self.assertIn("GEMINI_MODEL_FALLBACK: ${{ vars.GEMINI_MODEL_FALLBACK || secrets.GEMINI_MODEL_FALLBACK || 'gemini-2.0-flash' }}", workflow)
+        self.assertIn("RULE_SCREENER_PREFER_AIHUBMIX: ${{ vars.RULE_SCREENER_PREFER_AIHUBMIX || 'false' }}", workflow)
+        self.assertIn("RULE_SCREENER_AIHUBMIX_MODEL: ${{ vars.RULE_SCREENER_AIHUBMIX_MODEL || 'gpt-5-chat-latest' }}", workflow)
+        self.assertIn("uses: actions/cache@v4", workflow)
+        self.assertIn("python scripts/run_rule_screener.py", workflow)
+
+
 if __name__ == "__main__":
     unittest.main()

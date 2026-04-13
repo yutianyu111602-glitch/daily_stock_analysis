@@ -23,6 +23,7 @@ from typing import Optional, Tuple, List, Dict, Any
 
 import pandas as pd
 import requests
+from requests.exceptions import ConnectionError as RequestsConnectionError, Timeout as RequestsTimeout
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -75,10 +76,17 @@ def _is_us_code(stock_code: str) -> bool:
 class _TushareHttpClient:
     """Lightweight Tushare Pro client that does not require the tushare SDK."""
 
-    def __init__(self, token: str, timeout: int = 30, api_url: str = "http://api.tushare.pro") -> None:
+    def __init__(
+        self,
+        token: str,
+        timeout: int = 90,
+        api_url: str = "http://api.tushare.pro",
+        max_retries: int = 3,
+    ) -> None:
         self._token = token
         self._timeout = timeout
         self._api_url = api_url
+        self._max_retries = max_retries
 
     def query(self, api_name: str, fields: str = "", **kwargs) -> pd.DataFrame:
         req_params = {
@@ -87,7 +95,26 @@ class _TushareHttpClient:
             "params": kwargs,
             "fields": fields,
         }
-        res = requests.post(self._api_url, json=req_params, timeout=self._timeout)
+        last_error: Optional[Exception] = None
+        res = None
+        for attempt in range(1, self._max_retries + 1):
+            try:
+                res = requests.post(self._api_url, json=req_params, timeout=self._timeout)
+                break
+            except (RequestsTimeout, RequestsConnectionError) as exc:
+                last_error = exc
+                if attempt >= self._max_retries:
+                    raise
+                sleep_seconds = min(2 ** (attempt - 1), 5)
+                logger.warning(
+                    "Tushare API %s 第 %s 次请求超时/连接失败，%s 秒后重试",
+                    api_name,
+                    attempt,
+                    sleep_seconds,
+                )
+                time.sleep(sleep_seconds)
+        if res is None:
+            raise last_error or Exception("Tushare API request failed")
         if res.status_code != 200:
             raise Exception(f"Tushare API HTTP {res.status_code}")
 
@@ -178,7 +205,13 @@ class TushareFetcher(BaseFetcher):
         The project already normalizes all Pro calls through the same request
         contract, so we do not need the official tushare SDK during runtime.
         """
-        client = _TushareHttpClient(token=token)
+        timeout = int(os.getenv("TUSHARE_HTTP_TIMEOUT", "90"))
+        max_retries = int(os.getenv("TUSHARE_HTTP_RETRIES", "3"))
+        client = _TushareHttpClient(
+            token=token,
+            timeout=timeout,
+            max_retries=max_retries,
+        )
         logger.debug("Tushare API client configured for direct HTTP calls")
         return client
 
@@ -392,9 +425,9 @@ class TushareFetcher(BaseFetcher):
             return f"{code}.BJ"
         
         # Regular stocks
-        # Shanghai: 600xxx, 601xxx, 603xxx, 688xxx (STAR Market)
+        # Shanghai: 600xxx, 601xxx, 603xxx, 605xxx, 688xxx (STAR Market)
         # Shenzhen: 000xxx, 002xxx, 300xxx (ChiNext)
-        if code.startswith(('600', '601', '603', '688')):
+        if code.startswith(('600', '601', '603', '605', '688')):
             return f"{code}.SH"
         elif code.startswith(('000', '002', '300')):
             return f"{code}.SZ"
