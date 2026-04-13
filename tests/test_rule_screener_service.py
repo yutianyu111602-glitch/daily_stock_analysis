@@ -6,10 +6,13 @@ import unittest
 import pandas as pd
 
 from src.services.rule_screener_service import (
+    AshareRuleScreenerService,
     AshareRuleConfig,
     RuleScreeningCandidate,
     _build_sector_snapshot_from_tushare,
     _filter_stock_universe,
+    _merge_stock_codes,
+    _split_stock_codes,
     apply_selection_rules,
     build_screening_report,
 )
@@ -81,6 +84,7 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
 
         self.assertIn("2026-04-13", report)
         self.assertIn("未筛出符合条件的A股股票", report)
+        self.assertIn("5 日线乖离率 < 8%", report)
 
     def test_build_screening_report_contains_ai_review_summary(self) -> None:
         candidate = RuleScreeningCandidate(
@@ -122,6 +126,28 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         self.assertIn("筛选档位", report)
         self.assertIn("轻度放宽版", report)
         self.assertIn("已自动切换", report)
+
+    def test_build_screening_report_includes_stock_pool_notes(self) -> None:
+        report = build_screening_report(
+            candidates=[],
+            report_date="2026-04-13",
+            stock_pool_notes=["已自动加入自选池：300490, 600010"],
+        )
+
+        self.assertIn("自选池同步", report)
+        self.assertIn("300490", report)
+
+    def test_merge_stock_codes_preserves_existing_order_and_deduplicates(self) -> None:
+        merged = _merge_stock_codes(["603601", "300490"], ["300490", "600010", "000559"])
+        self.assertEqual(merged, ["603601", "300490", "600010", "000559"])
+
+    def test_split_stock_codes_normalizes_values(self) -> None:
+        self.assertEqual(_split_stock_codes("603601, 300490 ,600010"), ["603601", "300490", "600010"])
+
+    def test_should_sync_stock_pool_only_when_notifications_enabled(self) -> None:
+        service = object.__new__(AshareRuleScreenerService)
+        self.assertTrue(service._should_sync_stock_pool(send_notification=True))
+        self.assertFalse(service._should_sync_stock_pool(send_notification=False))
 
     def test_filter_stock_universe_excludes_st_and_recent_ipo(self) -> None:
         stock_list = pd.DataFrame(

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
 import pandas as pd
+import requests
 
 from data_provider.base import is_st_stock, normalize_stock_code
 from src.config import Config, get_config
@@ -34,7 +35,7 @@ class AshareRuleConfig:
     min_volume_ratio: float = 1.5
     min_turnover_rate: float = 5.0
     min_sector_change_pct: float = 2.0
-    max_bias_ma5_pct: float = 5.0
+    max_bias_ma5_pct: float = 8.0
     ai_review_limit: int = 8
     sector_rank_top_n: int = 80
     notify_when_empty: bool = True
@@ -74,6 +75,7 @@ class RuleScreeningRunResult:
     report: str
     profile_name: str
     profile_notes: List[str]
+    stock_pool_notes: List[str]
 
 
 def _normalize_sector_name(name: str) -> str:
@@ -369,6 +371,25 @@ def _merge_index_member_frames(frames: Sequence[pd.DataFrame]) -> pd.DataFrame:
     return merged.reset_index(drop=True)
 
 
+def _split_stock_codes(raw_value: Optional[str]) -> List[str]:
+    if not raw_value:
+        return []
+    parts = [normalize_stock_code(part) for part in str(raw_value).split(",")]
+    return [part for part in parts if part]
+
+
+def _merge_stock_codes(existing_codes: Sequence[str], new_codes: Sequence[str]) -> List[str]:
+    merged: List[str] = []
+    seen = set()
+    for code in list(existing_codes) + list(new_codes):
+        normalized = normalize_stock_code(code)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        merged.append(normalized)
+    return merged
+
+
 def apply_selection_rules(
     daily_history: pd.DataFrame,
     latest_turnover: Dict[str, float],
@@ -409,7 +430,10 @@ def build_screening_report(
     ai_review_lines: Optional[Sequence[str]] = None,
     profile_name: str = "严格版",
     profile_notes: Optional[Sequence[str]] = None,
+    stock_pool_notes: Optional[Sequence[str]] = None,
+    rule_config: Optional[AshareRuleConfig] = None,
 ) -> str:
+    rule_config = rule_config or AshareRuleConfig()
     lines = [
         f"# A股规则选股日报 {report_date}",
         "",
@@ -421,23 +445,21 @@ def build_screening_report(
     lines.extend([
         "",
         "## 策略条件",
-        "- 前期累计涨幅不少于 20%",
+        f"- 前期累计涨幅不少于 {rule_config.min_prior_rise_pct:.0f}%",
         "- 经过 ABC 式调整后再度转强",
         "- 收盘重新站上 20 日均线",
-        "- 量比 > 1.5，换手率 > 5%",
-        "- 所属板块涨幅 > 2%",
-        "- 5 日线乖离率 < 5%",
+        f"- 量比 > {rule_config.min_volume_ratio:.1f}，换手率 > {rule_config.min_turnover_rate:.1f}%",
+        f"- 所属板块涨幅 > {rule_config.min_sector_change_pct:.0f}%",
+        f"- 5 日线乖离率 < {rule_config.max_bias_ma5_pct:.0f}%",
         "- MA5 > MA10 > MA20",
         "",
     ])
 
     if not candidates:
-        lines.extend(
-            [
-                "## 结果",
-                "- 今日未筛出符合条件的A股股票。",
-            ]
-        )
+        lines.extend(["## 结果", "- 今日未筛出符合条件的A股股票。"])
+        if stock_pool_notes:
+            lines.extend(["", "## 自选池同步"])
+            lines.extend(f"- {line}" for line in stock_pool_notes)
         return "\n".join(lines)
 
     lines.extend(
@@ -463,6 +485,10 @@ def build_screening_report(
         lines.extend(["", "## AI复核"])
         lines.extend(f"- {line}" for line in ai_review_lines)
 
+    if stock_pool_notes:
+        lines.extend(["", "## 自选池同步"])
+        lines.extend(f"- {line}" for line in stock_pool_notes)
+
     return "\n".join(lines)
 
 
@@ -482,6 +508,7 @@ class AshareRuleScreenerService:
         self.rule_config = rule_config or AshareRuleConfig(
             lookback_days=int(os.getenv("RULE_SCREENER_LOOKBACK_DAYS", "60")),
             abc_window_days=int(os.getenv("RULE_SCREENER_ABC_WINDOW_DAYS", "20")),
+            max_bias_ma5_pct=float(os.getenv("RULE_SCREENER_MAX_BIAS_MA5_PCT", "8")),
             ai_review_limit=int(os.getenv("RULE_SCREENER_AI_REVIEW_LIMIT", "8")),
             sector_rank_top_n=int(os.getenv("RULE_SCREENER_SECTOR_TOP_N", "80")),
             exclude_st=os.getenv("RULE_SCREENER_EXCLUDE_ST", "true").lower() != "false",
@@ -812,6 +839,72 @@ class AshareRuleScreenerService:
             )
         return lines
 
+    def _github_headers(self, token: str) -> Dict[str, str]:
+        return {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+
+    def _get_repo_variable(self, repo: str, token: str, name: str) -> Optional[str]:
+        url = f"https://api.github.com/repos/{repo}/actions/variables/{name}"
+        response = requests.get(url, headers=self._github_headers(token), timeout=30)
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        payload = response.json()
+        return payload.get("value")
+
+    def _upsert_repo_variable(self, repo: str, token: str, name: str, value: str) -> None:
+        headers = self._github_headers(token)
+        variable_url = f"https://api.github.com/repos/{repo}/actions/variables/{name}"
+        payload = {"name": name, "value": value}
+
+        existing = requests.get(variable_url, headers=headers, timeout=30)
+        if existing.status_code == 404:
+            create_url = f"https://api.github.com/repos/{repo}/actions/variables"
+            response = requests.post(create_url, headers=headers, json=payload, timeout=30)
+            response.raise_for_status()
+            return
+
+        existing.raise_for_status()
+        response = requests.patch(variable_url, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+
+    def _sync_candidates_to_stock_pool(self, candidates: Sequence[RuleScreeningCandidate]) -> List[str]:
+        if os.getenv("RULE_SCREENER_AUTO_APPEND_TO_STOCK_LIST", "true").strip().lower() == "false":
+            return []
+        if not candidates:
+            return []
+
+        token = (os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN") or "").strip()
+        repo = (
+            os.getenv("RULE_SCREENER_STOCK_POOL_REPO")
+            or os.getenv("GITHUB_REPOSITORY")
+            or ""
+        ).strip()
+        if not token or not repo:
+            logger.warning("规则选股命中后未自动加入自选池：缺少 GITHUB_TOKEN/GH_TOKEN 或目标仓库配置")
+            return ["命中股票未自动加入自选池：缺少 GitHub 仓库或 Token 配置。"]
+
+        candidate_codes = [candidate.code for candidate in candidates]
+        try:
+            current_raw = self._get_repo_variable(repo, token, "STOCK_LIST")
+            existing_codes = _split_stock_codes(current_raw)
+            merged_codes = _merge_stock_codes(existing_codes, candidate_codes)
+            added_codes = [code for code in candidate_codes if code not in set(existing_codes)]
+            if merged_codes != existing_codes:
+                self._upsert_repo_variable(repo, token, "STOCK_LIST", ",".join(merged_codes))
+                logger.info("规则选股命中股票已自动并入自选池: repo=%s, added=%s", repo, ",".join(added_codes))
+                return [f"已自动加入自选池：{', '.join(added_codes)}"]
+            return ["命中股票均已存在于自选池，无需重复加入。"]
+        except Exception as exc:
+            logger.warning("规则选股命中后同步自选池失败: %s", exc)
+            return [f"命中股票自动加入自选池失败：{exc}"]
+
+    def _should_sync_stock_pool(self, *, send_notification: bool) -> bool:
+        return send_notification
+
     def run(
         self,
         *,
@@ -898,12 +991,18 @@ class AshareRuleScreenerService:
             )
             ai_review_lines = self._build_ai_review_lines(ai_results)
 
+        stock_pool_notes = self._sync_candidates_to_stock_pool(candidates) if self._should_sync_stock_pool(
+            send_notification=send_notification
+        ) else []
+
         report = build_screening_report(
             candidates=candidates,
             report_date=latest_trade_date,
             ai_review_lines=ai_review_lines,
             profile_name=profile_name,
             profile_notes=profile_notes,
+            stock_pool_notes=stock_pool_notes,
+            rule_config=active_config,
         )
 
         if send_notification and (candidates or self.rule_config.notify_when_empty):
@@ -916,4 +1015,5 @@ class AshareRuleScreenerService:
             report=report,
             profile_name=profile_name,
             profile_notes=profile_notes,
+            stock_pool_notes=stock_pool_notes,
         )

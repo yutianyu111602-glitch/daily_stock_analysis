@@ -18,7 +18,11 @@ from src.services.rule_screener_service import AshareRuleScreenerService
 def prepare_rule_screener_env() -> None:
     disable_gemini = os.getenv("RULE_SCREENER_DISABLE_GEMINI", "").strip().lower() == "true"
     disable_anthropic = os.getenv("RULE_SCREENER_DISABLE_ANTHROPIC", "").strip().lower() == "true"
-    prefer_aihubmix = os.getenv("RULE_SCREENER_PREFER_AIHUBMIX", "").strip().lower() == "true"
+    prefer_aihubmix_raw = os.getenv("RULE_SCREENER_PREFER_AIHUBMIX", "").strip().lower()
+    prefer_aihubmix = prefer_aihubmix_raw == "true" or (
+        prefer_aihubmix_raw == ""
+        and bool(os.getenv("AIHUBMIX_KEY", "").strip())
+    )
 
     if prefer_aihubmix and os.getenv("AIHUBMIX_KEY", "").strip():
         openai_model = (
@@ -27,9 +31,8 @@ def prepare_rule_screener_env() -> None:
             or "gpt-5-chat-latest"
         )
         os.environ["OPENAI_MODEL"] = openai_model
-        os.environ.setdefault(
-            "LITELLM_MODEL",
-            openai_model if "/" in openai_model else f"openai/{openai_model}",
+        os.environ["LITELLM_MODEL"] = (
+            openai_model if "/" in openai_model else f"openai/{openai_model}"
         )
         if not disable_gemini and not os.getenv("LITELLM_FALLBACK_MODELS", "").strip():
             gemini_fallback = os.getenv("RULE_SCREENER_GEMINI_FALLBACK_MODEL", "gemini-2.0-flash").strip()

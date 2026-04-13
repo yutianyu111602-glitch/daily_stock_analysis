@@ -15,6 +15,10 @@ concurrency:
   group: ashare-rule-screener
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  actions: write
+
 jobs:
   screen:
     runs-on: ubuntu-latest
@@ -47,10 +51,10 @@ jobs:
         env:
           AIHUBMIX_KEY: ${{ secrets.AIHUBMIX_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          LITELLM_MODEL: ${{ vars.RULE_SCREENER_LITELLM_MODEL || 'gemini/gemini-2.0-flash' }}
-          LITELLM_FALLBACK_MODELS: ${{ vars.RULE_SCREENER_LITELLM_FALLBACK_MODELS || 'openai/gpt-5-chat-latest' }}
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || secrets.GEMINI_MODEL || 'gemini-2.0-flash' }}
-          GEMINI_MODEL_FALLBACK: ${{ vars.GEMINI_MODEL_FALLBACK || secrets.GEMINI_MODEL_FALLBACK || 'gemini-2.0-flash' }}
+          LITELLM_MODEL: ${{ vars.RULE_SCREENER_LITELLM_MODEL || 'openai/gpt-5-chat-latest' }}
+          LITELLM_FALLBACK_MODELS: ${{ vars.RULE_SCREENER_LITELLM_FALLBACK_MODELS || '' }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || secrets.GEMINI_MODEL || '' }}
+          GEMINI_MODEL_FALLBACK: ${{ vars.GEMINI_MODEL_FALLBACK || secrets.GEMINI_MODEL_FALLBACK || '' }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL || secrets.OPENAI_BASE_URL }}
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL || secrets.OPENAI_MODEL }}
@@ -88,17 +92,21 @@ jobs:
           REPORT_DECISION_STYLE: ${{ vars.REPORT_DECISION_STYLE || secrets.REPORT_DECISION_STYLE || 'conservative' }}
           NEWS_STRATEGY_PROFILE: ${{ vars.NEWS_STRATEGY_PROFILE || secrets.NEWS_STRATEGY_PROFILE || 'short' }}
           REALTIME_SOURCE_PRIORITY: ${{ vars.REALTIME_SOURCE_PRIORITY || 'tushare,tencent,akshare_sina,efinance,akshare_em' }}
+          GITHUB_TOKEN: ${{ github.token }}
           RULE_SCREENER_AI_REVIEW_LIMIT: ${{ vars.RULE_SCREENER_AI_REVIEW_LIMIT || '8' }}
           RULE_SCREENER_LOOKBACK_DAYS: ${{ vars.RULE_SCREENER_LOOKBACK_DAYS || '60' }}
           RULE_SCREENER_ABC_WINDOW_DAYS: ${{ vars.RULE_SCREENER_ABC_WINDOW_DAYS || '20' }}
+          RULE_SCREENER_MAX_BIAS_MA5_PCT: ${{ vars.RULE_SCREENER_MAX_BIAS_MA5_PCT || '8' }}
           RULE_SCREENER_SECTOR_TOP_N: ${{ vars.RULE_SCREENER_SECTOR_TOP_N || '80' }}
           RULE_SCREENER_EXCLUDE_ST: ${{ vars.RULE_SCREENER_EXCLUDE_ST || 'true' }}
           RULE_SCREENER_ALLOW_FALLBACK: ${{ vars.RULE_SCREENER_ALLOW_FALLBACK || 'false' }}
           RULE_SCREENER_AUTO_RELAX_IF_EMPTY: ${{ vars.RULE_SCREENER_AUTO_RELAX_IF_EMPTY || 'true' }}
-          RULE_SCREENER_PREFER_AIHUBMIX: ${{ vars.RULE_SCREENER_PREFER_AIHUBMIX || 'false' }}
+          RULE_SCREENER_AUTO_APPEND_TO_STOCK_LIST: ${{ vars.RULE_SCREENER_AUTO_APPEND_TO_STOCK_LIST || 'true' }}
+          RULE_SCREENER_STOCK_POOL_REPO: ${{ vars.RULE_SCREENER_STOCK_POOL_REPO || github.repository }}
+          RULE_SCREENER_PREFER_AIHUBMIX: ${{ vars.RULE_SCREENER_PREFER_AIHUBMIX || 'true' }}
           RULE_SCREENER_AIHUBMIX_MODEL: ${{ vars.RULE_SCREENER_AIHUBMIX_MODEL || 'gpt-5-chat-latest' }}
-          RULE_SCREENER_GEMINI_FALLBACK_MODEL: ${{ vars.RULE_SCREENER_GEMINI_FALLBACK_MODEL || 'gemini-2.0-flash' }}
-          RULE_SCREENER_DISABLE_GEMINI: ${{ vars.RULE_SCREENER_DISABLE_GEMINI || 'false' }}
+          RULE_SCREENER_GEMINI_FALLBACK_MODEL: ${{ vars.RULE_SCREENER_GEMINI_FALLBACK_MODEL || '' }}
+          RULE_SCREENER_DISABLE_GEMINI: ${{ vars.RULE_SCREENER_DISABLE_GEMINI || 'true' }}
           RULE_SCREENER_DISABLE_ANTHROPIC: ${{ vars.RULE_SCREENER_DISABLE_ANTHROPIC || 'true' }}
           RULE_SCREENER_CACHE_DIR: .cache/rule_screener/tushare
         run: |
