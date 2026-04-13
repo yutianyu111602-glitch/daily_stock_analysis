@@ -4,19 +4,22 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 
 from src.services.rule_screener_service import (
     AshareRuleScreenerService,
     AshareRuleConfig,
+    DynamicAdjustment,
     RuleScreeningCandidate,
+    RuleScreeningBuckets,
     _build_sector_snapshot_from_tushare,
     _filter_stock_universe,
     _merge_stock_codes,
     _split_stock_codes,
     apply_selection_rules,
+    build_technical_candidate_pool,
     build_screening_report,
 )
 
@@ -49,6 +52,31 @@ def _build_matching_history(code: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _build_candidate(
+    code: str,
+    *,
+    name: str = "样本股票",
+    sector_name: str = "样本板块",
+    sector_change_pct: float = 3.1,
+) -> RuleScreeningCandidate:
+    return RuleScreeningCandidate(
+        code=code,
+        name=name,
+        close=21.7,
+        ma5=20.96,
+        ma10=20.08,
+        ma20=18.94,
+        bias_ma5_pct=3.53,
+        volume_ratio=1.86,
+        turnover_rate=8.2,
+        sector_name=sector_name,
+        sector_change_pct=sector_change_pct,
+        prior_rise_pct=34.8,
+        abc_pattern_confirmed=True,
+        notes=["放量站回20日线", "5/10/20日线多头排列"],
+    )
+
+
 class RuleScreenerServiceTestCase(unittest.TestCase):
     def test_apply_selection_rules_returns_candidate_when_all_rules_match(self) -> None:
         history = _build_matching_history("300490")
@@ -79,6 +107,20 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
 
         self.assertEqual(matched, [])
 
+    def test_build_technical_candidate_pool_keeps_candidate_when_sector_is_weak(self) -> None:
+        history = _build_matching_history("300565")
+        config = AshareRuleConfig()
+
+        matched = build_technical_candidate_pool(
+            daily_history=history,
+            latest_turnover={"300565": 7.6},
+            sector_snapshot={"300565": [{"name": "化工", "change_pct": 1.3}]},
+            config=config,
+        )
+
+        self.assertEqual([item.code for item in matched], ["300565"])
+        self.assertIn("板块强度未达筛选阈值", matched[0].notes[-1])
+
     def test_build_screening_report_handles_empty_candidates(self) -> None:
         report = build_screening_report(
             candidates=[],
@@ -89,23 +131,181 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         self.assertIn("未筛出符合条件的A股股票", report)
         self.assertIn("5 日线乖离率 < 8%", report)
 
-    def test_build_screening_report_contains_ai_review_summary(self) -> None:
-        candidate = RuleScreeningCandidate(
-            code="000559",
-            name="万向钱潮",
-            close=21.7,
-            ma5=20.96,
-            ma10=20.08,
-            ma20=18.94,
-            bias_ma5_pct=3.53,
-            volume_ratio=1.86,
-            turnover_rate=8.2,
-            sector_name="汽车零部件",
-            sector_change_pct=3.1,
-            prior_rise_pct=34.8,
-            abc_pattern_confirmed=True,
-            notes=["放量站回20日线", "5/10/20日线多头排列"],
+    def test_build_screening_report_renders_layered_sections(self) -> None:
+        report = build_screening_report(
+            candidates=[],
+            report_date="2026-04-13",
+            grouped_candidates={
+                "full": [_build_candidate("000001", name="平安银行", sector_name="银行")],
+                "relaxed": [_build_candidate("000559", name="万向钱潮", sector_name="汽车零部件")],
+                "technical": [_build_candidate("300490", name="华自科技", sector_name="基础化工", sector_change_pct=1.4)],
+            },
+            market_regime_label="震荡偏强",
+            dynamic_adjustments=[
+                "板块强度阈值 2.0% -> 1.5%（严格档无结果，进入动态放宽观察）",
+            ],
         )
+
+        self.assertIn("市场环境：震荡偏强", report)
+        self.assertIn("板块强度阈值 2.0% -> 1.5%（严格档无结果，进入动态放宽观察）", report)
+        self.assertIn("## 完整命中（1 只）", report)
+        self.assertIn("## 动态放宽命中（1 只）", report)
+        self.assertIn("## 技术候选池（1 只）", report)
+        self.assertIn("平安银行 (000001)", report)
+        self.assertIn("万向钱潮 (000559)", report)
+        self.assertIn("华自科技 (300490)", report)
+        self.assertNotIn("未筛出符合条件的A股股票", report)
+
+    def test_build_screening_report_renders_layered_sections_from_dataclass(self) -> None:
+        report = build_screening_report(
+            candidates=[],
+            report_date="2026-04-13",
+            grouped_candidates=RuleScreeningBuckets(
+                full_hits=[_build_candidate("000001", name="平安银行", sector_name="银行")],
+                relaxed_hits=[_build_candidate("000559", name="万向钱潮", sector_name="汽车零部件")],
+                technical_pool=[_build_candidate("300490", name="华自科技", sector_name="基础化工", sector_change_pct=1.4)],
+            ),
+        )
+
+        self.assertIn("## 完整命中（1 只）", report)
+        self.assertIn("## 动态放宽命中（1 只）", report)
+        self.assertIn("## 技术候选池（1 只）", report)
+        self.assertIn("平安银行 (000001)", report)
+        self.assertIn("万向钱潮 (000559)", report)
+        self.assertIn("华自科技 (300490)", report)
+
+    def test_build_screening_report_only_outputs_empty_copy_when_all_buckets_are_empty(self) -> None:
+        empty_report = build_screening_report(
+            candidates=[],
+            report_date="2026-04-13",
+            grouped_candidates={"full": [], "relaxed": [], "technical": []},
+        )
+        technical_only_report = build_screening_report(
+            candidates=[],
+            report_date="2026-04-13",
+            grouped_candidates={
+                "full": [],
+                "relaxed": [],
+                "technical": [_build_candidate("300490", name="华自科技", sector_name="基础化工", sector_change_pct=1.4)],
+            },
+        )
+
+        self.assertIn("未筛出符合条件的A股股票", empty_report)
+        self.assertNotIn("## 技术候选池", empty_report)
+        self.assertNotIn("未筛出符合条件的A股股票", technical_only_report)
+        self.assertIn("## 技术候选池（1 只）", technical_only_report)
+
+    def test_build_screening_report_marks_sector_rule_as_reference_for_technical_pool_only(self) -> None:
+        report = build_screening_report(
+            candidates=[],
+            report_date="2026-04-13",
+            grouped_candidates={
+                "full": [],
+                "relaxed": [],
+                "technical": [_build_candidate("300490", name="华自科技", sector_name="基础化工", sector_change_pct=1.4)],
+            },
+        )
+
+        self.assertIn(
+            "所属板块涨幅 > 2%（完整/放宽命中时适用；技术候选池仅供参考，不作硬性剔除）",
+            report,
+        )
+
+    def test_build_screening_report_rejects_conflicting_candidate_sources(self) -> None:
+        with self.assertRaises(ValueError):
+            build_screening_report(
+                candidates=[_build_candidate("000001", name="平安银行", sector_name="银行")],
+                report_date="2026-04-13",
+                grouped_candidates={"full": [_build_candidate("000559", name="万向钱潮", sector_name="汽车零部件")]},
+            )
+
+    def test_build_screening_report_falls_back_to_legacy_candidates_when_buckets_are_empty(self) -> None:
+        report = build_screening_report(
+            candidates=[_build_candidate("000001", name="平安银行", sector_name="银行")],
+            report_date="2026-04-13",
+            screening_buckets=RuleScreeningBuckets(),
+        )
+
+        self.assertIn("## 完整命中（1 只）", report)
+        self.assertIn("平安银行 (000001)", report)
+
+    def test_dynamic_adjustment_object_still_renders_with_numeric_values(self) -> None:
+        report = build_screening_report(
+            candidates=[],
+            report_date="2026-04-13",
+            grouped_candidates={"full": [_build_candidate("000001", name="平安银行", sector_name="银行")]},
+            dynamic_adjustments=[
+                DynamicAdjustment(
+                    name="板块强度阈值",
+                    from_value=2.0,
+                    to_value=1.5,
+                    reason="严格档无结果",
+                )
+            ],
+        )
+
+        self.assertIn("板块强度阈值：2.0 -> 1.5（严格档无结果）", report)
+
+    def test_run_uses_technical_pool_section_when_fallback_is_triggered(self) -> None:
+        service = object.__new__(AshareRuleScreenerService)
+        service.config = MagicMock()
+        service.rule_config = AshareRuleConfig(auto_relax_if_empty=True)
+        service.notifier = MagicMock()
+        service._load_trade_dates = MagicMock(return_value=["20260413", "20260201"])
+        service._load_stock_universe = MagicMock(return_value=pd.DataFrame())
+        service._load_daily_history = MagicMock(return_value=_build_matching_history("300565"))
+        service._load_latest_turnover = MagicMock(return_value={"300565": 7.6})
+        service._select_technical_candidates = MagicMock(return_value=["300565"])
+        service._load_sector_snapshot = MagicMock(
+            side_effect=[
+                {"300565": [{"name": "化工", "change_pct": 1.3}]},
+                {"300565": [{"name": "化工", "change_pct": 1.3}]},
+            ]
+        )
+        service._build_relaxed_rule_config = MagicMock(return_value=AshareRuleConfig(min_sector_change_pct=2.0))
+
+        result = service.run(send_notification=False, ai_review=False)
+
+        self.assertIn("## 技术候选池（1 只）", result.report)
+        self.assertNotIn("## 完整命中（1 只）", result.report)
+
+    def test_run_limits_ai_review_codes_outside_technical_pool_mode(self) -> None:
+        service = object.__new__(AshareRuleScreenerService)
+        service.config = MagicMock()
+        service.rule_config = AshareRuleConfig(ai_review_limit=1, auto_relax_if_empty=False)
+        service.notifier = MagicMock()
+        service._load_trade_dates = MagicMock(return_value=["20260413", "20260201"])
+        service._load_stock_universe = MagicMock(return_value=pd.DataFrame())
+        service._load_daily_history = MagicMock(
+            return_value=pd.concat(
+                [_build_matching_history("300490"), _build_matching_history("300565")],
+                ignore_index=True,
+            )
+        )
+        service._load_latest_turnover = MagicMock(return_value={"300490": 8.2, "300565": 7.6})
+        service._select_technical_candidates = MagicMock(return_value=["300490", "300565"])
+        service._load_sector_snapshot = MagicMock(
+            return_value={
+                "300490": [{"name": "化工", "change_pct": 3.4}],
+                "300565": [{"name": "汽车", "change_pct": 3.1}],
+            }
+        )
+        service._build_ai_review_lines = MagicMock(return_value=["AI 复核摘要"])
+
+        with patch("src.core.pipeline.StockAnalysisPipeline") as pipeline_cls:
+            pipeline = pipeline_cls.return_value
+            pipeline.run.return_value = []
+
+            result = service.run(send_notification=False, ai_review=True)
+
+        self.assertEqual(len(result.candidates), 2)
+        self.assertEqual(
+            pipeline.run.call_args.kwargs["stock_codes"],
+            [result.candidates[0].code],
+        )
+
+    def test_build_screening_report_contains_ai_review_summary(self) -> None:
+        candidate = _build_candidate("000559", name="万向钱潮", sector_name="汽车零部件")
 
         report = build_screening_report(
             candidates=[candidate],
@@ -204,12 +404,12 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
             sw_daily_df=sw_daily_df,
             candidate_codes=["000559", "300490"],
             trade_date="20260413",
-            min_sector_change_pct=2.0,
         )
 
         self.assertEqual(snapshot["000559"][0]["name"], "汽车")
         self.assertAlmostEqual(snapshot["000559"][0]["change_pct"], 2.8)
-        self.assertEqual(snapshot["300490"], [])
+        self.assertEqual(snapshot["300490"][0]["name"], "基础化工")
+        self.assertAlmostEqual(snapshot["300490"][0]["change_pct"], 1.4)
 
     def test_call_tushare_cached_ignores_empty_cache_and_refetches(self) -> None:
         with TemporaryDirectory() as tmpdir:

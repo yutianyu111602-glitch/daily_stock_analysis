@@ -5,7 +5,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Union
 
 import pandas as pd
 import requests
@@ -65,6 +65,42 @@ class RuleScreeningCandidate:
     prior_rise_pct: float
     abc_pattern_confirmed: bool
     notes: List[str] = field(default_factory=list)
+
+
+@dataclass
+class DynamicAdjustment:
+    name: str
+    from_value: float
+    to_value: float
+    reason: str
+
+    def to_report_line(self) -> str:
+        line = f"{self.name}：{self.from_value:.1f} -> {self.to_value:.1f}"
+        if self.reason:
+            line = f"{line}（{self.reason}）"
+        return line
+
+
+@dataclass
+class RuleScreeningBuckets:
+    full_hits: List[RuleScreeningCandidate] = field(default_factory=list)
+    relaxed_hits: List[RuleScreeningCandidate] = field(default_factory=list)
+    technical_pool: List[RuleScreeningCandidate] = field(default_factory=list)
+
+    def is_empty(self) -> bool:
+        return not (self.full_hits or self.relaxed_hits or self.technical_pool)
+
+    @property
+    def full_matches(self) -> List[RuleScreeningCandidate]:
+        return self.full_hits
+
+    @property
+    def relaxed_matches(self) -> List[RuleScreeningCandidate]:
+        return self.relaxed_hits
+
+    @property
+    def technical_candidates(self) -> List[RuleScreeningCandidate]:
+        return self.technical_pool
 
 
 @dataclass
@@ -211,11 +247,24 @@ def _pick_strong_sector(
     return best_name, best_change
 
 
+def _pick_best_sector(
+    sector_snapshot: Dict[str, List[Dict[str, Any]]],
+    code: str,
+) -> tuple[str, float]:
+    boards = sector_snapshot.get(code, []) or []
+    if not boards:
+        return "", 0.0
+    best_board = max(boards, key=lambda item: float(item.get("change_pct") or 0.0))
+    return str(best_board.get("name") or ""), float(best_board.get("change_pct") or 0.0)
+
+
 def _build_candidate(
     group: pd.DataFrame,
     latest_turnover: Dict[str, float],
     sector_snapshot: Dict[str, List[Dict[str, Any]]],
     config: AshareRuleConfig,
+    *,
+    require_sector_strength: bool = True,
 ) -> Optional[RuleScreeningCandidate]:
     group = group.sort_values("trade_date").reset_index(drop=True)
     if len(group) < max(config.lookback_days, 20):
@@ -233,11 +282,8 @@ def _build_candidate(
     bias_ma5_pct = float(latest["bias_ma5_pct"])
     volume_ratio = float(latest["volume_ratio"])
     turnover_rate = float(latest_turnover.get(code) or 0.0)
-    sector_name, sector_change_pct = _pick_strong_sector(
-        sector_snapshot=sector_snapshot,
-        code=code,
-        min_sector_change_pct=config.min_sector_change_pct,
-    )
+    sector_name, sector_change_pct = _pick_best_sector(sector_snapshot=sector_snapshot, code=code)
+    sector_strength_passed = sector_change_pct >= config.min_sector_change_pct
     abc_pattern_confirmed, prior_rise_pct = _detect_abc_pattern(
         group["close"].tolist(),
         abc_window_days=config.abc_window_days,
@@ -254,7 +300,7 @@ def _build_candidate(
         bias_ma5_pct < config.max_bias_ma5_pct,
         volume_ratio >= config.min_volume_ratio,
         turnover_rate >= config.min_turnover_rate,
-        sector_change_pct >= config.min_sector_change_pct,
+        sector_strength_passed if require_sector_strength else True,
         prior_rise_pct >= config.min_prior_rise_pct,
         abc_pattern_confirmed,
     ]
@@ -266,9 +312,11 @@ def _build_candidate(
         "ABC 调整后重新转强",
         f"收盘站上 MA20，现价 {close:.2f} / MA20 {ma20:.2f}",
         f"量比 {volume_ratio:.2f}，换手率 {turnover_rate:.2f}%",
-        f"{sector_name} 涨幅 {sector_change_pct:.2f}%",
+        f"{sector_name or '板块数据暂缺'} 涨幅 {sector_change_pct:.2f}%",
         f"MA5 乖离率 {bias_ma5_pct:.2f}% ，均线多头排列",
     ]
+    if not sector_strength_passed:
+        notes.append(f"板块强度未达筛选阈值 {config.min_sector_change_pct:.2f}%")
     name = str(latest.get("name") or code)
 
     return RuleScreeningCandidate(
@@ -314,7 +362,6 @@ def _build_sector_snapshot_from_tushare(
     sw_daily_df: pd.DataFrame,
     candidate_codes: Sequence[str],
     trade_date: str,
-    min_sector_change_pct: float,
 ) -> Dict[str, List[Dict[str, Any]]]:
     snapshot: Dict[str, List[Dict[str, Any]]] = {normalize_stock_code(code): [] for code in candidate_codes}
     if index_member_df is None or index_member_df.empty or sw_daily_df is None or sw_daily_df.empty:
@@ -328,8 +375,7 @@ def _build_sector_snapshot_from_tushare(
             "name": str(row.name),
             "change_pct": float(row.pct_change),
         }
-        for row in sector_df.itertuples(index=False)
-        if float(row.pct_change) >= min_sector_change_pct
+    for row in sector_df.itertuples(index=False)
     }
 
     member_df = index_member_df.copy()
@@ -390,8 +436,15 @@ def _merge_stock_codes(existing_codes: Sequence[str], new_codes: Sequence[str]) 
     return merged
 
 
-def _count_sector_matched_codes(sector_snapshot: Dict[str, List[Dict[str, Any]]]) -> int:
-    return sum(1 for boards in sector_snapshot.values() if boards)
+def _count_sector_matched_codes(
+    sector_snapshot: Dict[str, List[Dict[str, Any]]],
+    min_sector_change_pct: float,
+) -> int:
+    return sum(
+        1
+        for boards in sector_snapshot.values()
+        if any(float(board.get("change_pct") or 0.0) >= min_sector_change_pct for board in boards)
+    )
 
 
 def _sample_records(df: Optional[pd.DataFrame], columns: Sequence[str], limit: int = 3) -> List[Dict[str, Any]]:
@@ -437,16 +490,117 @@ def apply_selection_rules(
     )
 
 
+def build_technical_candidate_pool(
+    daily_history: pd.DataFrame,
+    latest_turnover: Dict[str, float],
+    sector_snapshot: Dict[str, List[Dict[str, Any]]],
+    config: Optional[AshareRuleConfig] = None,
+) -> List[RuleScreeningCandidate]:
+    config = config or AshareRuleConfig()
+    prepared = _prepare_indicator_frame(daily_history)
+    if prepared.empty:
+        return []
+
+    candidates: List[RuleScreeningCandidate] = []
+    for _, group in prepared.groupby("code"):
+        candidate = _build_candidate(
+            group=group,
+            latest_turnover=latest_turnover,
+            sector_snapshot=sector_snapshot,
+            config=config,
+            require_sector_strength=False,
+        )
+        if candidate is not None:
+            candidates.append(candidate)
+
+    return sorted(
+        candidates,
+        key=lambda item: (
+            item.volume_ratio,
+            item.turnover_rate,
+            item.prior_rise_pct,
+            item.sector_change_pct,
+        ),
+        reverse=True,
+    )
+
+
 def build_screening_report(
     candidates: Sequence[RuleScreeningCandidate],
     report_date: str,
+    *,
     ai_review_lines: Optional[Sequence[str]] = None,
     profile_name: str = "严格版",
     profile_notes: Optional[Sequence[str]] = None,
     stock_pool_notes: Optional[Sequence[str]] = None,
     rule_config: Optional[AshareRuleConfig] = None,
+    grouped_candidates: Optional[Union[RuleScreeningBuckets, Dict[str, Sequence[RuleScreeningCandidate]]]] = None,
+    market_regime_label: str = "",
+    dynamic_adjustments: Optional[Sequence[Union[DynamicAdjustment, str]]] = None,
+    screening_buckets: Optional[RuleScreeningBuckets] = None,
 ) -> str:
+    def normalize_grouped_candidates(
+        value: Optional[Union[RuleScreeningBuckets, Dict[str, Sequence[RuleScreeningCandidate]]]],
+    ) -> RuleScreeningBuckets:
+        if value is None:
+            return RuleScreeningBuckets(full_hits=list(candidates))
+        if isinstance(value, RuleScreeningBuckets):
+            return value
+        return RuleScreeningBuckets(
+            full_hits=list(value.get("full", []) or []),
+            relaxed_hits=list(value.get("relaxed", []) or []),
+            technical_pool=list(value.get("technical", []) or []),
+        )
+
+    def has_candidates(value: Optional[Union[RuleScreeningBuckets, Dict[str, Sequence[RuleScreeningCandidate]]]]) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, RuleScreeningBuckets):
+            return not value.is_empty()
+        return any(value.get(key) for key in ("full", "relaxed", "technical"))
+
+    def append_candidate_section(
+        section_title: str,
+        section_candidates: Sequence[RuleScreeningCandidate],
+    ) -> None:
+        if not section_candidates:
+            return
+
+        lines.extend(
+            [
+                f"## {section_title}（{len(section_candidates)} 只）",
+                "",
+            ]
+        )
+        for idx, candidate in enumerate(section_candidates, start=1):
+            lines.extend(
+                [
+                    f"{idx}. {candidate.name} ({candidate.code})",
+                    f"   - 板块：{candidate.sector_name or '暂无板块数据'}（{candidate.sector_change_pct:+.2f}%）",
+                    f"   - 现价/MA5/MA10/MA20：{candidate.close:.2f} / {candidate.ma5:.2f} / {candidate.ma10:.2f} / {candidate.ma20:.2f}",
+                    f"   - 量比/换手率：{candidate.volume_ratio:.2f} / {candidate.turnover_rate:.2f}%",
+                    f"   - 前高前累计涨幅：{candidate.prior_rise_pct:.2f}%",
+                    f"   - 规则说明：{'；'.join(candidate.notes)}",
+                ]
+            )
+        lines.append("")
+
     rule_config = rule_config or AshareRuleConfig()
+    if candidates and (has_candidates(grouped_candidates) or has_candidates(screening_buckets)):
+        raise ValueError("build_screening_report received conflicting candidate sources")
+    bucket_source = grouped_candidates if grouped_candidates is not None else screening_buckets
+    if has_candidates(bucket_source):
+        grouped_candidates = normalize_grouped_candidates(bucket_source)
+    elif candidates:
+        grouped_candidates = RuleScreeningBuckets(full_hits=list(candidates))
+    else:
+        grouped_candidates = normalize_grouped_candidates(bucket_source)
+    sector_rule_line = f"- 所属板块涨幅 > {rule_config.min_sector_change_pct:.0f}%"
+    if grouped_candidates.technical_pool and not grouped_candidates.full_hits and not grouped_candidates.relaxed_hits:
+        sector_rule_line = (
+            f"- 所属板块涨幅 > {rule_config.min_sector_change_pct:.0f}%"
+            "（完整/放宽命中时适用；技术候选池仅供参考，不作硬性剔除）"
+        )
     lines = [
         f"# A股规则选股日报 {report_date}",
         "",
@@ -455,6 +609,13 @@ def build_screening_report(
     ]
     if profile_notes:
         lines.extend(f"- {note}" for note in profile_notes)
+    if market_regime_label:
+        lines.append(f"- 市场环境：{market_regime_label}")
+    if dynamic_adjustments:
+        lines.extend(
+            f"- {adjustment.to_report_line()}" if isinstance(adjustment, DynamicAdjustment) else f"- {adjustment}"
+            for adjustment in dynamic_adjustments
+        )
     lines.extend([
         "",
         "## 策略条件",
@@ -462,37 +623,22 @@ def build_screening_report(
         "- 经过 ABC 式调整后再度转强",
         "- 收盘重新站上 20 日均线",
         f"- 量比 > {rule_config.min_volume_ratio:.1f}，换手率 > {rule_config.min_turnover_rate:.1f}%",
-        f"- 所属板块涨幅 > {rule_config.min_sector_change_pct:.0f}%",
+        sector_rule_line,
         f"- 5 日线乖离率 < {rule_config.max_bias_ma5_pct:.0f}%",
         "- MA5 > MA10 > MA20",
         "",
     ])
 
-    if not candidates:
+    if grouped_candidates.is_empty():
         lines.extend(["## 结果", "- 今日未筛出符合条件的A股股票。"])
         if stock_pool_notes:
             lines.extend(["", "## 自选池同步"])
             lines.extend(f"- {line}" for line in stock_pool_notes)
         return "\n".join(lines)
 
-    lines.extend(
-        [
-            f"## 命中结果（{len(candidates)} 只）",
-            "",
-        ]
-    )
-
-    for idx, candidate in enumerate(candidates, start=1):
-        lines.extend(
-            [
-                f"{idx}. {candidate.name} ({candidate.code})",
-                f"   - 板块：{candidate.sector_name}（{candidate.sector_change_pct:+.2f}%）",
-                f"   - 现价/MA5/MA10/MA20：{candidate.close:.2f} / {candidate.ma5:.2f} / {candidate.ma10:.2f} / {candidate.ma20:.2f}",
-                f"   - 量比/换手率：{candidate.volume_ratio:.2f} / {candidate.turnover_rate:.2f}%",
-                f"   - 前高前累计涨幅：{candidate.prior_rise_pct:.2f}%",
-                f"   - 规则说明：{'；'.join(candidate.notes)}",
-            ]
-        )
+    append_candidate_section("完整命中", grouped_candidates.full_hits)
+    append_candidate_section("动态放宽命中", grouped_candidates.relaxed_hits)
+    append_candidate_section("技术候选池", grouped_candidates.technical_pool)
 
     if ai_review_lines:
         lines.extend(["", "## AI复核"])
@@ -857,7 +1003,6 @@ class AshareRuleScreenerService:
             sw_daily_df=sw_daily_df,
             candidate_codes=candidate_codes,
             trade_date=trade_date,
-            min_sector_change_pct=sector_threshold,
         )
 
     def _select_technical_candidates(
@@ -982,6 +1127,7 @@ class AshareRuleScreenerService:
         active_config = self.rule_config
         profile_name = "严格版"
         profile_notes: List[str] = ["严格条件命中优先；仅当严格档为 0 只时，才会启用轻度放宽版。"]
+        grouped_candidates = RuleScreeningBuckets()
 
         technical_candidate_codes = self._select_technical_candidates(
             daily_history=daily_history,
@@ -999,13 +1145,15 @@ class AshareRuleScreenerService:
             config=active_config,
         )
         strict_technical_count = len(technical_candidate_codes)
-        strict_sector_count = _count_sector_matched_codes(sector_snapshot)
+        strict_sector_count = _count_sector_matched_codes(sector_snapshot, active_config.min_sector_change_pct)
         logger.info(
             "规则选股严格版统计: technical=%s, sector=%s, final=%s",
             strict_technical_count,
             strict_sector_count,
             len(candidates),
         )
+        if candidates:
+            grouped_candidates = RuleScreeningBuckets(full_hits=list(candidates))
 
         if not candidates and self.rule_config.auto_relax_if_empty:
             active_config = self._build_relaxed_rule_config()
@@ -1039,7 +1187,7 @@ class AshareRuleScreenerService:
                 config=active_config,
             )
             relaxed_technical_count = len(technical_candidate_codes)
-            relaxed_sector_count = _count_sector_matched_codes(sector_snapshot)
+            relaxed_sector_count = _count_sector_matched_codes(sector_snapshot, active_config.min_sector_change_pct)
             profile_notes.append(
                 f"轻度放宽版诊断：技术形态命中 {relaxed_technical_count} 只，板块强度命中 {relaxed_sector_count} 只，最终入选 {len(candidates)} 只。"
             )
@@ -1049,12 +1197,37 @@ class AshareRuleScreenerService:
                 relaxed_sector_count,
                 len(candidates),
             )
+            if candidates:
+                grouped_candidates = RuleScreeningBuckets(relaxed_hits=list(candidates))
+
+        stock_pool_sync_enabled = True
+        technical_pool_mode = False
+        if not candidates and technical_candidate_codes:
+            candidates = build_technical_candidate_pool(
+                daily_history=daily_history[daily_history["code"].isin(technical_candidate_codes)],
+                latest_turnover=latest_turnover,
+                sector_snapshot=sector_snapshot,
+                config=active_config,
+            )
+            if candidates:
+                stock_pool_sync_enabled = False
+                technical_pool_mode = True
+                grouped_candidates = RuleScreeningBuckets(technical_pool=list(candidates))
+                profile_name = f"{profile_name}（技术候选池）"
+                profile_notes.append(
+                    f"因板块强度条件当日未命中，已回退到技术形态候选池，共列出 {len(candidates)} 只股票并全部做 AI 复核，供人工精选。"
+                )
+                profile_notes.append(
+                    "该名单满足上涨、ABC 调整、站上 20 日线、量比/换手率、均线结构等核心技术条件；板块强度仅作参考，不再作为剔除条件。"
+                )
+                logger.info("规则选股已回退到技术候选池: candidates=%s", len(candidates))
 
         ai_review_lines: List[str] = []
         if candidates and ai_review:
             from src.core.pipeline import StockAnalysisPipeline
 
-            review_codes = [candidate.code for candidate in candidates[: active_config.ai_review_limit]]
+            review_candidates = candidates if technical_pool_mode else candidates[: active_config.ai_review_limit]
+            review_codes = [candidate.code for candidate in review_candidates]
             pipeline = StockAnalysisPipeline(
                 config=self.config,
                 max_workers=min(2, len(review_codes)) or 1,
@@ -1067,18 +1240,23 @@ class AshareRuleScreenerService:
             )
             ai_review_lines = self._build_ai_review_lines(ai_results)
 
-        stock_pool_notes = self._sync_candidates_to_stock_pool(candidates) if self._should_sync_stock_pool(
+        stock_pool_notes: List[str] = []
+        if candidates and not stock_pool_sync_enabled:
+            stock_pool_notes = ["当前为技术候选池名单，未自动并入自选池，请人工确认后再决定是否加入。"]
+        elif self._should_sync_stock_pool(
             send_notification=send_notification
-        ) else []
+        ):
+            stock_pool_notes = self._sync_candidates_to_stock_pool(candidates)
 
         report = build_screening_report(
-            candidates=candidates,
+            candidates=[],
             report_date=latest_trade_date,
             ai_review_lines=ai_review_lines,
             profile_name=profile_name,
             profile_notes=profile_notes,
             stock_pool_notes=stock_pool_notes,
             rule_config=active_config,
+            grouped_candidates=grouped_candidates,
         )
 
         if send_notification and (candidates or self.rule_config.notify_when_empty):
