@@ -36,7 +36,7 @@ class AshareRuleConfig:
     min_turnover_rate: float = 5.0
     min_sector_change_pct: float = 2.0
     max_bias_ma5_pct: float = 8.0
-    ai_review_limit: int = 8
+    ai_review_limit: int = 0
     sector_rank_top_n: int = 80
     notify_when_empty: bool = True
     exclude_st: bool = True
@@ -75,7 +75,7 @@ class DynamicAdjustment:
     reason: str
 
     def to_report_line(self) -> str:
-        line = f"{self.name}：{self.from_value:.1f} -> {self.to_value:.1f}"
+        line = f"{self.name}：{_format_adjustment_value(self.from_value)} -> {_format_adjustment_value(self.to_value)}"
         if self.reason:
             line = f"{line}（{self.reason}）"
         return line
@@ -112,6 +112,14 @@ class RuleScreeningRunResult:
     profile_name: str
     profile_notes: List[str]
     stock_pool_notes: List[str]
+
+
+@dataclass
+class RuleScreeningStageResult:
+    config: AshareRuleConfig
+    technical_candidate_codes: List[str] = field(default_factory=list)
+    sector_snapshot: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
+    candidates: List[RuleScreeningCandidate] = field(default_factory=list)
 
 
 def _normalize_sector_name(name: str) -> str:
@@ -503,6 +511,17 @@ def _extract_sector_change_values(snapshot: Dict[str, Any]) -> List[float]:
     return values
 
 
+def _format_rule_threshold(value: float) -> str:
+    return f"{float(value):.2f}".rstrip("0").rstrip(".")
+
+
+def _format_adjustment_value(value: float) -> str:
+    formatted = f"{float(value):.2f}".rstrip("0")
+    if formatted.endswith("."):
+        formatted += "0"
+    return formatted
+
+
 def _classify_market_regime(snapshot: Dict[str, Any]) -> str:
     if isinstance(snapshot.get("stats"), dict):
         merged_snapshot = dict(snapshot["stats"])
@@ -569,8 +588,21 @@ def _build_dynamic_rule_config(
     config = replace(base)
     adjustments: List[DynamicAdjustment] = []
 
-    def apply_adjustment(attr_name: str, to_value: float, name: str, reason: str) -> None:
+    def apply_adjustment(
+        attr_name: str,
+        target_value: float,
+        name: str,
+        reason: str,
+        *,
+        direction: str,
+    ) -> None:
         from_value = float(getattr(config, attr_name))
+        if direction == "loosen_min":
+            to_value = min(from_value, target_value)
+        elif direction == "loosen_max":
+            to_value = max(from_value, target_value)
+        else:
+            raise ValueError(f"Unsupported adjustment direction: {direction}")
         if from_value == to_value:
             return
         setattr(config, attr_name, to_value)
@@ -585,17 +617,23 @@ def _build_dynamic_rule_config(
 
     normalized_regime = (market_regime or "").strip().lower()
     if normalized_regime == "strong":
-        apply_adjustment("min_sector_change_pct", 1.5, "板块涨幅阈值", "强势日仅小幅保守放宽")
+        apply_adjustment(
+            "min_sector_change_pct",
+            1.5,
+            "板块涨幅阈值",
+            "强势日仅小幅保守放宽",
+            direction="loosen_min",
+        )
     elif normalized_regime == "neutral":
-        apply_adjustment("min_volume_ratio", 1.3, "量比", "中性日轻放宽")
-        apply_adjustment("min_turnover_rate", 4.5, "换手率", "中性日轻放宽")
-        apply_adjustment("min_sector_change_pct", 1.2, "板块涨幅阈值", "中性日轻放宽")
-        apply_adjustment("max_bias_ma5_pct", 8.5, "MA5乖离率", "中性日轻放宽")
+        apply_adjustment("min_volume_ratio", 1.3, "量比", "中性日轻放宽", direction="loosen_min")
+        apply_adjustment("min_turnover_rate", 4.5, "换手率", "中性日轻放宽", direction="loosen_min")
+        apply_adjustment("min_sector_change_pct", 1.2, "板块涨幅阈值", "中性日轻放宽", direction="loosen_min")
+        apply_adjustment("max_bias_ma5_pct", 8.5, "MA5乖离率", "中性日轻放宽", direction="loosen_max")
     elif normalized_regime == "weak":
-        apply_adjustment("min_volume_ratio", 1.2, "量比", "弱势日优先保留量能")
-        apply_adjustment("min_turnover_rate", 4.0, "换手率", "弱势日优先保留换手")
-        apply_adjustment("min_sector_change_pct", 0.8, "板块涨幅阈值", "弱势日放宽板块强度")
-        apply_adjustment("max_bias_ma5_pct", 9.0, "MA5乖离率", "弱势日允许更大回撤")
+        apply_adjustment("min_volume_ratio", 1.2, "量比", "弱势日优先保留量能", direction="loosen_min")
+        apply_adjustment("min_turnover_rate", 4.0, "换手率", "弱势日优先保留换手", direction="loosen_min")
+        apply_adjustment("min_sector_change_pct", 0.8, "板块涨幅阈值", "弱势日放宽板块强度", direction="loosen_min")
+        apply_adjustment("max_bias_ma5_pct", 9.0, "MA5乖离率", "弱势日允许更大回撤", direction="loosen_max")
 
     return config, adjustments
 
@@ -748,10 +786,10 @@ def build_screening_report(
         grouped_candidates = RuleScreeningBuckets(full_hits=list(candidates))
     else:
         grouped_candidates = normalize_grouped_candidates(bucket_source)
-    sector_rule_line = f"- 所属板块涨幅 > {rule_config.min_sector_change_pct:.0f}%"
+    sector_rule_line = f"- 所属板块涨幅 > {_format_rule_threshold(rule_config.min_sector_change_pct)}%"
     if grouped_candidates.technical_pool and not grouped_candidates.full_hits and not grouped_candidates.relaxed_hits:
         sector_rule_line = (
-            f"- 所属板块涨幅 > {rule_config.min_sector_change_pct:.0f}%"
+            f"- 所属板块涨幅 > {_format_rule_threshold(rule_config.min_sector_change_pct)}%"
             "（完整/放宽命中时适用；技术候选池仅供参考，不作硬性剔除）"
         )
     lines = [
@@ -772,12 +810,12 @@ def build_screening_report(
     lines.extend([
         "",
         "## 策略条件",
-        f"- 前期累计涨幅不少于 {rule_config.min_prior_rise_pct:.0f}%",
+        f"- 前期累计涨幅不少于 {_format_rule_threshold(rule_config.min_prior_rise_pct)}%",
         "- 经过 ABC 式调整后再度转强",
         "- 收盘重新站上 20 日均线",
-        f"- 量比 > {rule_config.min_volume_ratio:.1f}，换手率 > {rule_config.min_turnover_rate:.1f}%",
+        f"- 量比 > {_format_rule_threshold(rule_config.min_volume_ratio)}，换手率 > {_format_rule_threshold(rule_config.min_turnover_rate)}%",
         sector_rule_line,
-        f"- 5 日线乖离率 < {rule_config.max_bias_ma5_pct:.0f}%",
+        f"- 5 日线乖离率 < {_format_rule_threshold(rule_config.max_bias_ma5_pct)}%",
         "- MA5 > MA10 > MA20",
         "",
     ])
@@ -821,7 +859,7 @@ class AshareRuleScreenerService:
             lookback_days=int(os.getenv("RULE_SCREENER_LOOKBACK_DAYS", "60")),
             abc_window_days=int(os.getenv("RULE_SCREENER_ABC_WINDOW_DAYS", "20")),
             max_bias_ma5_pct=float(os.getenv("RULE_SCREENER_MAX_BIAS_MA5_PCT", "8")),
-            ai_review_limit=int(os.getenv("RULE_SCREENER_AI_REVIEW_LIMIT", "8")),
+            ai_review_limit=int(os.getenv("RULE_SCREENER_AI_REVIEW_LIMIT", "0")),
             sector_rank_top_n=int(os.getenv("RULE_SCREENER_SECTOR_TOP_N", "80")),
             exclude_st=os.getenv("RULE_SCREENER_EXCLUDE_ST", "true").lower() != "false",
             allow_open_data_fallback=os.getenv("RULE_SCREENER_ALLOW_FALLBACK", "false").lower() == "true",
@@ -1162,15 +1200,17 @@ class AshareRuleScreenerService:
         self,
         daily_history: pd.DataFrame,
         latest_turnover: Dict[str, float],
+        config: Optional[AshareRuleConfig] = None,
     ) -> List[str]:
+        active_config = config or self.rule_config
         prepared = _prepare_indicator_frame(daily_history)
         candidate_codes: List[str] = []
         for code, group in prepared.groupby("code"):
             candidate = _build_candidate(
                 group=group,
                 latest_turnover=latest_turnover,
-                sector_snapshot={code: [{"name": "placeholder", "change_pct": self.rule_config.min_sector_change_pct}]},
-                config=self.rule_config,
+                sector_snapshot={code: [{"name": "placeholder", "change_pct": active_config.min_sector_change_pct}]},
+                config=active_config,
             )
             if candidate is not None:
                 candidate_codes.append(code)
@@ -1259,6 +1299,105 @@ class AshareRuleScreenerService:
     def _should_sync_stock_pool(self, *, send_notification: bool) -> bool:
         return send_notification
 
+    def _resolve_market_regime(self) -> tuple[str, str]:
+        snapshot: Dict[str, Any] = {}
+        fetcher_manager = getattr(self, "fetcher_manager", None)
+        if fetcher_manager is not None and hasattr(fetcher_manager, "get_market_stats"):
+            try:
+                raw_snapshot = fetcher_manager.get_market_stats() or {}
+                if isinstance(raw_snapshot, dict):
+                    snapshot = raw_snapshot
+            except Exception as exc:
+                logger.warning("获取市场状态快照失败，按中性市场处理: %s", exc)
+
+        if fetcher_manager is not None and hasattr(fetcher_manager, "get_main_indices"):
+            try:
+                raw_indices = fetcher_manager.get_main_indices(region="cn")
+                if isinstance(raw_indices, list):
+                    index_change: Dict[str, float] = {}
+                    for item in raw_indices:
+                        if not isinstance(item, dict):
+                            continue
+                        code = str(item.get("code") or "")
+                        change_pct = item.get("change_pct")
+                        if change_pct is None or pd.isna(change_pct):
+                            continue
+                        if code in {"000001", "000001.SH", "sh000001"}:
+                            index_change["sh"] = float(change_pct)
+                        elif code in {"399001", "399001.SZ", "sz399001"}:
+                            index_change["sz"] = float(change_pct)
+                        elif code in {"399006", "399006.SZ", "sz399006"}:
+                            index_change["cyb"] = float(change_pct)
+                    if index_change:
+                        snapshot["index_change"] = index_change
+            except Exception as exc:
+                logger.warning("获取主要指数快照失败，继续按现有市场统计判定: %s", exc)
+
+        if fetcher_manager is not None and hasattr(fetcher_manager, "get_sector_rankings"):
+            try:
+                raw_rankings = fetcher_manager.get_sector_rankings(n=self.rule_config.sector_rank_top_n)
+                if (
+                    isinstance(raw_rankings, tuple)
+                    and len(raw_rankings) == 2
+                    and isinstance(raw_rankings[0], list)
+                    and isinstance(raw_rankings[1], list)
+                ):
+                    top_sectors, bottom_sectors = raw_rankings
+                    snapshot["sector_rankings"] = {
+                        "top": top_sectors,
+                        "bottom": bottom_sectors,
+                    }
+            except Exception as exc:
+                logger.warning("获取板块排行失败，继续按现有市场统计判定: %s", exc)
+
+        market_regime = _classify_market_regime(snapshot)
+        regime_label = {
+            "strong": "强势日",
+            "neutral": "震荡日",
+            "weak": "弱势日",
+        }.get(market_regime, "震荡日")
+        return market_regime, regime_label
+
+    def _evaluate_screening_stage(
+        self,
+        *,
+        daily_history: pd.DataFrame,
+        latest_turnover: Dict[str, float],
+        trade_date: str,
+        config: AshareRuleConfig,
+        stage_name: str,
+    ) -> RuleScreeningStageResult:
+        technical_candidate_codes = self._select_technical_candidates(
+            daily_history=daily_history,
+            latest_turnover=latest_turnover,
+            config=config,
+        )
+        sector_snapshot = self._load_sector_snapshot(
+            technical_candidate_codes,
+            trade_date,
+            config.min_sector_change_pct,
+        )
+        scoped_history = daily_history[daily_history["code"].isin(technical_candidate_codes)]
+        candidates = apply_selection_rules(
+            daily_history=scoped_history,
+            latest_turnover=latest_turnover,
+            sector_snapshot=sector_snapshot,
+            config=config,
+        )
+        logger.info(
+            "规则选股%s统计: technical=%s, sector=%s, final=%s",
+            stage_name,
+            len(technical_candidate_codes),
+            _count_sector_matched_codes(sector_snapshot, config.min_sector_change_pct),
+            len(candidates),
+        )
+        return RuleScreeningStageResult(
+            config=config,
+            technical_candidate_codes=technical_candidate_codes,
+            sector_snapshot=sector_snapshot,
+            candidates=candidates,
+        )
+
     def run(
         self,
         *,
@@ -1277,109 +1416,90 @@ class AshareRuleScreenerService:
             logger.warning("Tushare 批量模式不可用，改走预筛降级链路: %s", exc)
             daily_history, latest_turnover, latest_trade_date = self._load_history_via_prefilter_fallback()
 
+        grouped_candidates = RuleScreeningBuckets()
         active_config = self.rule_config
         profile_name = "严格版"
-        profile_notes: List[str] = ["严格条件命中优先；仅当严格档为 0 只时，才会启用轻度放宽版。"]
-        grouped_candidates = RuleScreeningBuckets()
+        market_regime, market_regime_label = self._resolve_market_regime()
+        dynamic_adjustments: List[DynamicAdjustment] = []
+        profile_notes: List[str] = [
+            "严格条件命中优先；严格档为 0 时，才会按市场状态进入动态放宽。",
+            f"市场环境：{market_regime_label}",
+        ]
 
-        technical_candidate_codes = self._select_technical_candidates(
+        strict_stage = self._evaluate_screening_stage(
             daily_history=daily_history,
             latest_turnover=latest_turnover,
+            trade_date=latest_trade_date,
+            config=self.rule_config,
+            stage_name="严格版",
         )
-        sector_snapshot = self._load_sector_snapshot(
-            technical_candidate_codes,
-            latest_trade_date,
-            active_config.min_sector_change_pct,
-        )
-        candidates = apply_selection_rules(
-            daily_history=daily_history[daily_history["code"].isin(technical_candidate_codes)],
-            latest_turnover=latest_turnover,
-            sector_snapshot=sector_snapshot,
-            config=active_config,
-        )
-        strict_technical_count = len(technical_candidate_codes)
-        strict_sector_count = _count_sector_matched_codes(sector_snapshot, active_config.min_sector_change_pct)
-        logger.info(
-            "规则选股严格版统计: technical=%s, sector=%s, final=%s",
-            strict_technical_count,
-            strict_sector_count,
-            len(candidates),
-        )
-        if candidates:
-            grouped_candidates = RuleScreeningBuckets(full_hits=list(candidates))
-
-        if not candidates and self.rule_config.auto_relax_if_empty:
-            active_config = self._build_relaxed_rule_config()
-            profile_name = "轻度放宽版"
-            profile_notes = [
-                "严格条件当日筛出 0 只，已自动切换到轻度放宽版。",
-                f"放宽项：前高前涨幅 >= {active_config.min_prior_rise_pct:.1f}%，量比 >= {active_config.min_volume_ratio:.1f}，换手率 >= {active_config.min_turnover_rate:.1f}%，板块涨幅 >= {active_config.min_sector_change_pct:.1f}%，MA5 乖离率 < {active_config.max_bias_ma5_pct:.1f}%。",
-                "ABC 调整识别与板块强度阈值同步做了轻微放宽；该名单是候选观察池，不等于直接买入信号。",
-                f"严格版诊断：技术形态命中 {strict_technical_count} 只，板块强度命中 {strict_sector_count} 只，最终入选 {len(candidates)} 只。",
-            ]
-            technical_candidate_codes = []
-            prepared = _prepare_indicator_frame(daily_history)
-            for code, group in prepared.groupby("code"):
-                candidate = _build_candidate(
-                    group=group,
+        final_stage = strict_stage
+        if strict_stage.candidates:
+            grouped_candidates.full_hits = list(strict_stage.candidates)
+        else:
+            relaxed_stage: Optional[RuleScreeningStageResult] = None
+            if self.rule_config.auto_relax_if_empty:
+                active_config, dynamic_adjustments = _build_dynamic_rule_config(self.rule_config, market_regime)
+                profile_name = "动态放宽版"
+                profile_notes.append(f"严格条件为 0，已按 {market_regime_label} 进入动态放宽。")
+                profile_notes.extend(
+                    f"动态放宽：{adjustment.to_report_line()}" for adjustment in dynamic_adjustments
+                )
+                relaxed_stage = self._evaluate_screening_stage(
+                    daily_history=daily_history,
                     latest_turnover=latest_turnover,
-                    sector_snapshot={code: [{"name": "placeholder", "change_pct": active_config.min_sector_change_pct}]},
+                    trade_date=latest_trade_date,
                     config=active_config,
+                    stage_name="动态放宽版",
                 )
-                if candidate is not None:
-                    technical_candidate_codes.append(code)
-            sector_snapshot = self._load_sector_snapshot(
-                technical_candidate_codes,
-                latest_trade_date,
-                active_config.min_sector_change_pct,
-            )
-            candidates = apply_selection_rules(
-                daily_history=daily_history[daily_history["code"].isin(technical_candidate_codes)],
-                latest_turnover=latest_turnover,
-                sector_snapshot=sector_snapshot,
-                config=active_config,
-            )
-            relaxed_technical_count = len(technical_candidate_codes)
-            relaxed_sector_count = _count_sector_matched_codes(sector_snapshot, active_config.min_sector_change_pct)
-            profile_notes.append(
-                f"轻度放宽版诊断：技术形态命中 {relaxed_technical_count} 只，板块强度命中 {relaxed_sector_count} 只，最终入选 {len(candidates)} 只。"
-            )
-            logger.info(
-                "规则选股轻度放宽版统计: technical=%s, sector=%s, final=%s",
-                relaxed_technical_count,
-                relaxed_sector_count,
-                len(candidates),
-            )
-            if candidates:
-                grouped_candidates = RuleScreeningBuckets(relaxed_hits=list(candidates))
+                final_stage = relaxed_stage
+                if relaxed_stage.candidates:
+                    grouped_candidates.relaxed_hits = list(relaxed_stage.candidates)
+            else:
+                relaxed_stage = RuleScreeningStageResult(
+                    config=active_config,
+                    technical_candidate_codes=list(strict_stage.technical_candidate_codes),
+                    sector_snapshot=dict(strict_stage.sector_snapshot),
+                    candidates=[],
+                )
+                profile_notes.append("严格条件为 0，且已禁用动态放宽；继续输出技术候选池供人工精选。")
 
-        stock_pool_sync_enabled = True
-        technical_pool_mode = False
-        if not candidates and technical_candidate_codes:
-            candidates = build_technical_candidate_pool(
-                daily_history=daily_history[daily_history["code"].isin(technical_candidate_codes)],
-                latest_turnover=latest_turnover,
-                sector_snapshot=sector_snapshot,
-                config=active_config,
-            )
-            if candidates:
-                stock_pool_sync_enabled = False
-                technical_pool_mode = True
-                grouped_candidates = RuleScreeningBuckets(technical_pool=list(candidates))
-                profile_name = f"{profile_name}（技术候选池）"
-                profile_notes.append(
-                    f"因板块强度条件当日未命中，已回退到技术形态候选池，共列出 {len(candidates)} 只股票并全部做 AI 复核，供人工精选。"
+            stage_for_technical_pool = relaxed_stage or strict_stage
+            if grouped_candidates.is_empty() and stage_for_technical_pool.technical_candidate_codes:
+                technical_candidates = build_technical_candidate_pool(
+                    daily_history=daily_history[
+                        daily_history["code"].isin(stage_for_technical_pool.technical_candidate_codes)
+                    ],
+                    latest_turnover=latest_turnover,
+                    sector_snapshot=stage_for_technical_pool.sector_snapshot,
+                    config=stage_for_technical_pool.config,
                 )
-                profile_notes.append(
-                    "该名单满足上涨、ABC 调整、站上 20 日线、量比/换手率、均线结构等核心技术条件；板块强度仅作参考，不再作为剔除条件。"
-                )
-                logger.info("规则选股已回退到技术候选池: candidates=%s", len(candidates))
+                if technical_candidates:
+                    active_config = stage_for_technical_pool.config
+                    final_stage = stage_for_technical_pool
+                    grouped_candidates.technical_pool = list(technical_candidates)
+                    profile_name = f"{profile_name}（技术候选池）"
+                    profile_notes.append(
+                        f"动态放宽仍为 0，已回退到技术候选池，共列出 {len(technical_candidates)} 只股票并全部展示。"
+                    )
+                    profile_notes.append(
+                        "技术候选池满足核心技术结构，板块强度仅作参考，不自动并入自选池。"
+                    )
+                    logger.info("规则选股已回退到技术候选池: candidates=%s", len(technical_candidates))
+
+        stock_pool_sync_candidates = list(grouped_candidates.full_hits) + list(grouped_candidates.relaxed_hits)
+        display_candidates = stock_pool_sync_candidates + list(grouped_candidates.technical_pool)
 
         ai_review_lines: List[str] = []
-        if candidates and ai_review:
+        if display_candidates and ai_review:
             from src.core.pipeline import StockAnalysisPipeline
 
-            review_candidates = candidates if technical_pool_mode else candidates[: active_config.ai_review_limit]
+            review_limit = max(int(active_config.ai_review_limit), 0)
+            review_candidates = (
+                list(display_candidates)
+                if grouped_candidates.technical_pool or review_limit == 0
+                else list(display_candidates[:review_limit])
+            )
             review_codes = [candidate.code for candidate in review_candidates]
             pipeline = StockAnalysisPipeline(
                 config=self.config,
@@ -1394,12 +1514,12 @@ class AshareRuleScreenerService:
             ai_review_lines = self._build_ai_review_lines(ai_results)
 
         stock_pool_notes: List[str] = []
-        if candidates and not stock_pool_sync_enabled:
+        if grouped_candidates.technical_pool and not stock_pool_sync_candidates:
             stock_pool_notes = ["当前为技术候选池名单，未自动并入自选池，请人工确认后再决定是否加入。"]
-        elif self._should_sync_stock_pool(
+        elif stock_pool_sync_candidates and self._should_sync_stock_pool(
             send_notification=send_notification
         ):
-            stock_pool_notes = self._sync_candidates_to_stock_pool(candidates)
+            stock_pool_notes = self._sync_candidates_to_stock_pool(stock_pool_sync_candidates)
 
         report = build_screening_report(
             candidates=[],
@@ -1410,14 +1530,16 @@ class AshareRuleScreenerService:
             stock_pool_notes=stock_pool_notes,
             rule_config=active_config,
             grouped_candidates=grouped_candidates,
+            market_regime_label=market_regime_label,
+            dynamic_adjustments=dynamic_adjustments,
         )
 
-        if send_notification and (candidates or self.rule_config.notify_when_empty):
+        if send_notification and (display_candidates or self.rule_config.notify_when_empty):
             self.notifier.send(report)
 
         return RuleScreeningRunResult(
             trade_date=latest_trade_date,
-            candidates=candidates,
+            candidates=display_candidates,
             ai_review_lines=ai_review_lines,
             report=report,
             profile_name=profile_name,
