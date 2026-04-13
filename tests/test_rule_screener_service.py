@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import MagicMock
 
 import pandas as pd
 
@@ -207,6 +210,38 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         self.assertEqual(snapshot["000559"][0]["name"], "汽车")
         self.assertAlmostEqual(snapshot["000559"][0]["change_pct"], 2.8)
         self.assertEqual(snapshot["300490"], [])
+
+    def test_call_tushare_cached_ignores_empty_cache_and_refetches(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            service = object.__new__(AshareRuleScreenerService)
+            service.cache_dir = Path(tmpdir)
+            api_dir = service.cache_dir / "daily_basic"
+            api_dir.mkdir(parents=True, exist_ok=True)
+            cache_file = api_dir / "20260413.pkl"
+            pd.DataFrame().to_pickle(cache_file)
+
+            expected = pd.DataFrame([{"ts_code": "300490.SZ", "turnover_rate": 7.84}])
+            service.tushare_fetcher = MagicMock()
+            service.tushare_fetcher._call_api_with_rate_limit.return_value = expected
+
+            df = service._call_tushare_cached("daily_basic", cache_key="20260413", trade_date="20260413")
+
+            self.assertEqual(df.to_dict(orient="records"), expected.to_dict(orient="records"))
+            service.tushare_fetcher._call_api_with_rate_limit.assert_called_once_with("daily_basic", trade_date="20260413")
+            self.assertEqual(pd.read_pickle(cache_file).to_dict(orient="records"), expected.to_dict(orient="records"))
+
+    def test_call_tushare_cached_paginated_does_not_persist_empty_result(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            service = object.__new__(AshareRuleScreenerService)
+            service.cache_dir = Path(tmpdir)
+            service.tushare_fetcher = MagicMock()
+            service.tushare_fetcher._call_api_with_rate_limit.return_value = pd.DataFrame()
+
+            df = service._call_tushare_cached_paginated("index_member_all", cache_key="202604", fields="ts_code")
+
+            self.assertTrue(df.empty)
+            self.assertFalse((service.cache_dir / "index_member_all" / "202604.pkl").exists())
+            service.tushare_fetcher._call_api_with_rate_limit.assert_called_once()
 
 
 if __name__ == "__main__":

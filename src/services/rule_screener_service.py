@@ -542,10 +542,16 @@ class AshareRuleScreenerService:
     def _call_tushare_cached(self, api_name: str, *, cache_key: str, **kwargs) -> pd.DataFrame:
         cache_file = self._cache_file(api_name, cache_key)
         if cache_file.exists():
-            return pd.read_pickle(cache_file)
+            cached_df = pd.read_pickle(cache_file)
+            if isinstance(cached_df, pd.DataFrame) and not cached_df.empty:
+                return cached_df
+            logger.warning("检测到 %s 的空缓存 %s，已忽略并重新拉取。", api_name, cache_file)
         df = self.tushare_fetcher._call_api_with_rate_limit(api_name, **kwargs)
         cached_df = pd.DataFrame() if df is None else df
-        cached_df.to_pickle(cache_file)
+        if not cached_df.empty:
+            cached_df.to_pickle(cache_file)
+        elif cache_file.exists():
+            cache_file.unlink(missing_ok=True)
         return cached_df
 
     def _call_tushare_cached_paginated(
@@ -558,7 +564,10 @@ class AshareRuleScreenerService:
     ) -> pd.DataFrame:
         cache_file = self._cache_file(api_name, cache_key)
         if cache_file.exists():
-            return pd.read_pickle(cache_file)
+            cached_df = pd.read_pickle(cache_file)
+            if isinstance(cached_df, pd.DataFrame) and not cached_df.empty:
+                return cached_df
+            logger.warning("检测到 %s 的空缓存 %s，已忽略并重新拉取。", api_name, cache_file)
 
         frames: List[pd.DataFrame] = []
         offset = 0
@@ -574,7 +583,10 @@ class AshareRuleScreenerService:
             offset += page_size
 
         merged = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-        merged.to_pickle(cache_file)
+        if not merged.empty:
+            merged.to_pickle(cache_file)
+        elif cache_file.exists():
+            cache_file.unlink(missing_ok=True)
         return merged
 
     def _build_relaxed_rule_config(self) -> AshareRuleConfig:
