@@ -42,10 +42,10 @@ jobs:
       - name: 恢复规则选股缓存
         uses: actions/cache@v4
         with:
-          path: .cache/rule_screener
-          key: ${{ runner.os }}-rule-screener-${{ github.ref_name }}-${{ github.run_id }}
+          path: .cache/rule_screener_v2
+          key: ${{ runner.os }}-rule-screener-v2-${{ github.ref_name }}-${{ github.run_id }}
           restore-keys: |
-            ${{ runner.os }}-rule-screener-${{ github.ref_name }}-
+            ${{ runner.os }}-rule-screener-v2-${{ github.ref_name }}-
 
       - name: 执行规则选股
         env:
@@ -108,7 +108,7 @@ jobs:
           RULE_SCREENER_GEMINI_FALLBACK_MODEL: ${{ vars.RULE_SCREENER_GEMINI_FALLBACK_MODEL || '' }}
           RULE_SCREENER_DISABLE_GEMINI: ${{ vars.RULE_SCREENER_DISABLE_GEMINI || 'true' }}
           RULE_SCREENER_DISABLE_ANTHROPIC: ${{ vars.RULE_SCREENER_DISABLE_ANTHROPIC || 'true' }}
-          RULE_SCREENER_CACHE_DIR: .cache/rule_screener/tushare
+          RULE_SCREENER_CACHE_DIR: .cache/rule_screener_v2/tushare
         run: |
           ARGS=""
           if [ "${{ github.event.inputs.ai_review || 'true' }}" != "true" ]; then

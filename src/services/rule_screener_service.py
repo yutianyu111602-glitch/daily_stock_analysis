@@ -522,7 +522,7 @@ class AshareRuleScreenerService:
         self.fetcher_manager = fetcher_manager or DataFetcherManager()
         self.tushare_fetcher = tushare_fetcher or self._resolve_tushare_fetcher()
         self.notifier = notifier or NotificationService()
-        self.cache_dir = Path(os.getenv("RULE_SCREENER_CACHE_DIR", ".cache/rule_screener/tushare"))
+        self.cache_dir = Path(os.getenv("RULE_SCREENER_CACHE_DIR", ".cache/rule_screener_v2/tushare"))
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _resolve_tushare_fetcher(self) -> "TushareFetcher":

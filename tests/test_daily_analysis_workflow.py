@@ -47,7 +47,7 @@ class RuleScreenerWorkflowTestCase(unittest.TestCase):
         self.assertIn("RULE_SCREENER_STOCK_POOL_REPO: ${{ vars.RULE_SCREENER_STOCK_POOL_REPO || github.repository }}", workflow)
         self.assertIn("GITHUB_TOKEN: ${{ github.token }}", workflow)
         self.assertIn("RULE_SCREENER_DISABLE_GEMINI: ${{ vars.RULE_SCREENER_DISABLE_GEMINI || 'true' }}", workflow)
-        self.assertIn("RULE_SCREENER_CACHE_DIR: .cache/rule_screener/tushare", workflow)
+        self.assertIn("RULE_SCREENER_CACHE_DIR: .cache/rule_screener_v2/tushare", workflow)
         self.assertIn("LITELLM_MODEL: ${{ vars.RULE_SCREENER_LITELLM_MODEL || 'openai/gpt-5-chat-latest' }}", workflow)
         self.assertIn("LITELLM_FALLBACK_MODELS: ${{ vars.RULE_SCREENER_LITELLM_FALLBACK_MODELS || '' }}", workflow)
         self.assertIn("GEMINI_MODEL: ${{ vars.GEMINI_MODEL || secrets.GEMINI_MODEL || '' }}", workflow)
