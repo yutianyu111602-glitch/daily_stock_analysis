@@ -18,6 +18,15 @@ on:
           - full          # 完整分析（股票+大盘）
           - market-only   # 仅大盘复盘
           - stocks-only   # 仅股票分析
+      session_profile:
+        description: '报告档位（auto=按上午/下午自动切换）'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - intraday
+          - close
       force_run:
         description: '强制运行（跳过交易日检查）'
         required: false
@@ -183,6 +192,7 @@ jobs:
           # ==========================================
           REPORT_TYPE: ${{ vars.REPORT_TYPE || secrets.REPORT_TYPE || 'simple' }}
           REPORT_LANGUAGE: ${{ vars.REPORT_LANGUAGE || secrets.REPORT_LANGUAGE || '' }}
+          NEWS_STRATEGY_PROFILE: ${{ vars.NEWS_STRATEGY_PROFILE || secrets.NEWS_STRATEGY_PROFILE || 'short' }}
           SINGLE_STOCK_NOTIFY: ${{ vars.SINGLE_STOCK_NOTIFY || secrets.SINGLE_STOCK_NOTIFY || 'false' }}
           MARKET_REVIEW_ENABLED: ${{ vars.MARKET_REVIEW_ENABLED || secrets.MARKET_REVIEW_ENABLED || 'true' }}
           ANALYSIS_DELAY: ${{ vars.ANALYSIS_DELAY || secrets.ANALYSIS_DELAY || '0' }}
@@ -213,14 +223,49 @@ jobs:
 
           # 判断运行模式
           MODE="${{ github.event.inputs.mode || 'full' }}"
+          SESSION_PROFILE="${{ github.event.inputs.session_profile || 'auto' }}"
+          EVENT_SCHEDULE="${{ github.event.schedule || '' }}"
+
+          if [ "$SESSION_PROFILE" = "auto" ]; then
+            case "$EVENT_SCHEDULE" in
+              "30 3 * * 1-5")
+                SESSION_PROFILE="intraday"
+                ;;
+              "10 7 * * 1-5")
+                SESSION_PROFILE="close"
+                ;;
+              *)
+                SESSION_PROFILE="close"
+                ;;
+            esac
+          fi
+
+          case "$SESSION_PROFILE" in
+            intraday)
+              MODE="stocks-only"
+              REPORT_TYPE="brief"
+              MARKET_REVIEW_ENABLED="false"
+              NEWS_STRATEGY_PROFILE="ultra_short"
+              ;;
+            close)
+              MODE="full"
+              REPORT_TYPE="full"
+              MARKET_REVIEW_ENABLED="true"
+              NEWS_STRATEGY_PROFILE="short"
+              ;;
+          esac
+
+          export MODE REPORT_TYPE MARKET_REVIEW_ENABLED NEWS_STRATEGY_PROFILE
           
           echo "=========================================="
           echo "🚀 A股自选股智能分析系统"
           echo "=========================================="
           echo "⏰ 时间: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')"
           echo "🎯 运行模式: $MODE"
+          echo "🧭 报告档位: $SESSION_PROFILE"
           echo "📊 自选股: $STOCK_LIST"
           echo "📝 报告类型: $REPORT_TYPE"
+          echo "📰 新闻窗口: $NEWS_STRATEGY_PROFILE"
           echo ""
           echo "=========================================="
           echo "📋 配置检查"
