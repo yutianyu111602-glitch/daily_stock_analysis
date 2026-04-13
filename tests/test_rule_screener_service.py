@@ -14,7 +14,9 @@ from src.services.rule_screener_service import (
     DynamicAdjustment,
     RuleScreeningCandidate,
     RuleScreeningBuckets,
+    _build_dynamic_rule_config,
     _build_sector_snapshot_from_tushare,
+    _classify_market_regime,
     _filter_stock_universe,
     _merge_stock_codes,
     _split_stock_codes,
@@ -120,6 +122,170 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
 
         self.assertEqual([item.code for item in matched], ["300565"])
         self.assertIn("板块强度未达筛选阈值", matched[0].notes[-1])
+
+    def test_classify_market_regime_returns_weak_when_breadth_is_poor(self) -> None:
+        snapshot = {
+            "index_change": {"sh": -0.8, "sz": -1.1, "cyb": -1.5},
+            "up_count": 1200,
+            "down_count": 3800,
+            "limit_up": 35,
+            "limit_down": 22,
+            "sector_median": -0.6,
+        }
+
+        regime = _classify_market_regime(snapshot)
+
+        self.assertEqual(regime, "weak")
+
+    def test_classify_market_regime_supports_stats_wrapper_shape(self) -> None:
+        snapshot = {
+            "stats": {
+                "index_change": {"sh": -0.8, "sz": -1.1, "cyb": -1.5},
+                "up_count": 1200,
+                "down_count": 3800,
+                "limit_up_count": 35,
+                "limit_down_count": 22,
+                "sector_median": -0.6,
+            }
+        }
+
+        regime = _classify_market_regime(snapshot)
+
+        self.assertEqual(regime, "weak")
+
+    def test_classify_market_regime_supports_existing_market_stats_shape_for_strong(self) -> None:
+        snapshot = {
+            "index_change": {"sh": 0.7, "sz": 0.9, "cyb": 1.1},
+            "up_count": 3300,
+            "down_count": 1700,
+            "limit_up_count": 86,
+            "limit_down_count": 5,
+            "sector_changes": [
+                {"name": "电力设备", "change_pct": 2.4},
+                {"name": "基础化工", "change_pct": 1.8},
+                {"name": "钢铁", "change_pct": 0.9},
+            ],
+        }
+
+        regime = _classify_market_regime(snapshot)
+
+        self.assertEqual(regime, "strong")
+
+    def test_classify_market_regime_returns_neutral_when_inputs_are_mixed(self) -> None:
+        snapshot = {
+            "index_change": {"sh": 0.1, "sz": -0.1, "cyb": 0.2},
+            "up_count": 2500,
+            "down_count": 2400,
+            "limit_up_count": 42,
+            "limit_down_count": 18,
+            "sector_changes": [
+                {"name": "电力设备", "pct_change": 0.6},
+                {"name": "基础化工", "pct_change": -0.1},
+                {"name": "钢铁", "pct_change": 0.2},
+            ],
+        }
+
+        regime = _classify_market_regime(snapshot)
+
+        self.assertEqual(regime, "neutral")
+
+    def test_classify_market_regime_preserves_explicit_zero_sector_median(self) -> None:
+        snapshot = {
+            "index_change": {"sh": 0.1, "sz": 0.0, "cyb": 0.2},
+            "up_count": 2600,
+            "down_count": 2400,
+            "limit_up_count": 40,
+            "limit_down_count": 16,
+            "sector_median": 0.0,
+            "sector_changes": [
+                {"name": "电力设备", "change_pct": 2.6},
+                {"name": "钢铁", "change_pct": 1.9},
+                {"name": "传媒", "change_pct": 1.4},
+            ],
+        }
+
+        regime = _classify_market_regime(snapshot)
+
+        self.assertEqual(regime, "neutral")
+
+    def test_classify_market_regime_ignores_non_numeric_nested_sector_metadata(self) -> None:
+        snapshot = {
+            "index_change": {"sh": 0.7, "sz": 0.8, "cyb": 0.9},
+            "up_count": 3100,
+            "down_count": 1800,
+            "limit_up_count": 73,
+            "limit_down_count": 4,
+            "sector_rankings": {
+                "leaders": [
+                    {"name": "电力设备", "change_pct": 2.2},
+                    {"name": "基础化工", "change_pct": 1.7},
+                ],
+                "metadata": {"source": "tushare", "note": "sample"},
+            },
+        }
+
+        regime = _classify_market_regime(snapshot)
+
+        self.assertEqual(regime, "strong")
+
+    def test_classify_market_regime_ignores_numeric_sector_metadata(self) -> None:
+        snapshot = {
+            "index_change": {"sh": 0.7, "sz": 0.8, "cyb": 0.9},
+            "up_count": 3100,
+            "down_count": 1800,
+            "limit_up_count": 73,
+            "limit_down_count": 4,
+            "sector_rankings": {
+                "leaders": [
+                    {"name": "电力设备", "change_pct": 2.2},
+                    {"name": "基础化工", "change_pct": 1.7},
+                ],
+                "metadata": {"total": 80, "rank": 1},
+            },
+        }
+
+        regime = _classify_market_regime(snapshot)
+
+        self.assertEqual(regime, "strong")
+
+    def test_build_dynamic_rule_config_strong_is_conservative(self) -> None:
+        base = AshareRuleConfig()
+
+        config, adjustments = _build_dynamic_rule_config(base, "strong")
+
+        self.assertIsNot(config, base)
+        self.assertEqual(config.min_volume_ratio, base.min_volume_ratio)
+        self.assertEqual(config.min_turnover_rate, base.min_turnover_rate)
+        self.assertEqual(config.min_sector_change_pct, 1.5)
+        self.assertEqual(config.max_bias_ma5_pct, base.max_bias_ma5_pct)
+        self.assertEqual(len(adjustments), 1)
+        self.assertEqual(adjustments[0].name, "板块涨幅阈值")
+        self.assertEqual(adjustments[0].from_value, 2.0)
+        self.assertEqual(adjustments[0].to_value, 1.5)
+
+    def test_build_dynamic_rule_config_neutral_relaxes_secondary_thresholds(self) -> None:
+        base = AshareRuleConfig()
+
+        config, adjustments = _build_dynamic_rule_config(base, "neutral")
+
+        self.assertEqual(config.min_volume_ratio, 1.3)
+        self.assertEqual(config.min_turnover_rate, 4.5)
+        self.assertEqual(config.min_sector_change_pct, 1.2)
+        self.assertEqual(config.max_bias_ma5_pct, 8.5)
+        self.assertEqual(len(adjustments), 4)
+        self.assertEqual([item.name for item in adjustments], ["量比", "换手率", "板块涨幅阈值", "MA5乖离率"])
+
+    def test_build_dynamic_rule_config_weak_relaxes_to_watchlist_floor(self) -> None:
+        base = AshareRuleConfig()
+
+        config, adjustments = _build_dynamic_rule_config(base, "weak")
+
+        self.assertEqual(config.min_volume_ratio, 1.2)
+        self.assertEqual(config.min_turnover_rate, 4.0)
+        self.assertEqual(config.min_sector_change_pct, 0.8)
+        self.assertEqual(config.max_bias_ma5_pct, 9.0)
+        self.assertEqual(len(adjustments), 4)
+        self.assertEqual([item.name for item in adjustments], ["量比", "换手率", "板块涨幅阈值", "MA5乖离率"])
 
     def test_build_screening_report_handles_empty_candidates(self) -> None:
         report = build_screening_report(

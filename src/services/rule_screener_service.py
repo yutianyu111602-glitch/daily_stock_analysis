@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Union
@@ -445,6 +445,159 @@ def _count_sector_matched_codes(
         for boards in sector_snapshot.values()
         if any(float(board.get("change_pct") or 0.0) >= min_sector_change_pct for board in boards)
     )
+
+
+def _extract_snapshot_float(snapshot: Dict[str, Any], *keys: str) -> float:
+    for key in keys:
+        value = snapshot.get(key)
+        if value is not None and pd.notna(value):
+            return float(value)
+    return 0.0
+
+
+def _extract_snapshot_optional_float(snapshot: Dict[str, Any], *keys: str) -> Optional[float]:
+    for key in keys:
+        value = snapshot.get(key)
+        if value is not None and pd.notna(value):
+            return float(value)
+    return None
+
+
+def _extract_sector_change_values(snapshot: Dict[str, Any]) -> List[float]:
+    raw_values = snapshot.get("sector_changes")
+    if raw_values is None:
+        raw_values = snapshot.get("sector_rankings")
+    if raw_values is None:
+        raw_values = snapshot.get("sector_snapshot")
+
+    if raw_values is None:
+        return []
+
+    values: List[float] = []
+
+    def collect(item: Any) -> None:
+        if item is None:
+            return
+        if isinstance(item, dict):
+            if "change_pct" in item and item.get("change_pct") is not None and pd.notna(item.get("change_pct")):
+                values.append(float(item["change_pct"]))
+                return
+            if "pct_change" in item and item.get("pct_change") is not None and pd.notna(item.get("pct_change")):
+                values.append(float(item["pct_change"]))
+                return
+            for nested in item.values():
+                if isinstance(nested, (dict, list, tuple, set)):
+                    collect(nested)
+            return
+        if isinstance(item, (list, tuple, set)):
+            for nested in item:
+                collect(nested)
+            return
+        try:
+            if item is not None and pd.notna(item):
+                values.append(float(item))
+        except (TypeError, ValueError):
+            return
+
+    collect(raw_values)
+    return values
+
+
+def _classify_market_regime(snapshot: Dict[str, Any]) -> str:
+    if isinstance(snapshot.get("stats"), dict):
+        merged_snapshot = dict(snapshot["stats"])
+        merged_snapshot.update({key: value for key, value in snapshot.items() if key != "stats"})
+        snapshot = merged_snapshot
+
+    index_change = snapshot.get("index_change") or {}
+    if isinstance(index_change, dict):
+        index_values = [
+            float(value)
+            for key, value in index_change.items()
+            if key in {"sh", "sz", "cyb"} and value is not None and pd.notna(value)
+        ]
+    elif isinstance(index_change, (list, tuple, set)):
+        index_values = [float(value) for value in index_change if value is not None and pd.notna(value)]
+    elif index_change is None or pd.isna(index_change):
+        index_values = []
+    else:
+        index_values = [float(index_change)]
+    if not index_values:
+        for key in ("sh_change_pct", "sz_change_pct", "cyb_change_pct", "sh_pct_change", "sz_pct_change", "cyb_pct_change"):
+            value = snapshot.get(key)
+            if value is not None and pd.notna(value):
+                index_values.append(float(value))
+
+    avg_index_change = sum(index_values) / len(index_values) if index_values else 0.0
+    up_count = _extract_snapshot_float(snapshot, "up_count")
+    down_count = _extract_snapshot_float(snapshot, "down_count")
+    limit_up = _extract_snapshot_float(snapshot, "limit_up", "limit_up_count")
+    limit_down = _extract_snapshot_float(snapshot, "limit_down", "limit_down_count")
+    sector_median_value = _extract_snapshot_optional_float(snapshot, "sector_median")
+    sector_median = sector_median_value if sector_median_value is not None else 0.0
+    if sector_median_value is None:
+        sector_changes = _extract_sector_change_values(snapshot)
+        if sector_changes:
+            sector_median = float(pd.Series(sector_changes).median())
+
+    breadth_total = up_count + down_count
+    breadth_balance = (up_count - down_count) / breadth_total if breadth_total else 0.0
+    limit_balance = limit_up - limit_down
+
+    if (
+        avg_index_change <= -0.5
+        or (down_count > up_count and sector_median <= -0.3)
+        or (breadth_balance <= -0.2 and sector_median <= 0.0)
+    ):
+        return "weak"
+
+    if (
+        avg_index_change >= 0.5
+        and up_count >= down_count
+        and sector_median >= 0.2
+        and limit_balance >= 0
+    ):
+        return "strong"
+
+    return "neutral"
+
+
+def _build_dynamic_rule_config(
+    base: AshareRuleConfig,
+    market_regime: str,
+) -> tuple[AshareRuleConfig, List[DynamicAdjustment]]:
+    config = replace(base)
+    adjustments: List[DynamicAdjustment] = []
+
+    def apply_adjustment(attr_name: str, to_value: float, name: str, reason: str) -> None:
+        from_value = float(getattr(config, attr_name))
+        if from_value == to_value:
+            return
+        setattr(config, attr_name, to_value)
+        adjustments.append(
+            DynamicAdjustment(
+                name=name,
+                from_value=from_value,
+                to_value=to_value,
+                reason=reason,
+            )
+        )
+
+    normalized_regime = (market_regime or "").strip().lower()
+    if normalized_regime == "strong":
+        apply_adjustment("min_sector_change_pct", 1.5, "板块涨幅阈值", "强势日仅小幅保守放宽")
+    elif normalized_regime == "neutral":
+        apply_adjustment("min_volume_ratio", 1.3, "量比", "中性日轻放宽")
+        apply_adjustment("min_turnover_rate", 4.5, "换手率", "中性日轻放宽")
+        apply_adjustment("min_sector_change_pct", 1.2, "板块涨幅阈值", "中性日轻放宽")
+        apply_adjustment("max_bias_ma5_pct", 8.5, "MA5乖离率", "中性日轻放宽")
+    elif normalized_regime == "weak":
+        apply_adjustment("min_volume_ratio", 1.2, "量比", "弱势日优先保留量能")
+        apply_adjustment("min_turnover_rate", 4.0, "换手率", "弱势日优先保留换手")
+        apply_adjustment("min_sector_change_pct", 0.8, "板块涨幅阈值", "弱势日放宽板块强度")
+        apply_adjustment("max_bias_ma5_pct", 9.0, "MA5乖离率", "弱势日允许更大回撤")
+
+    return config, adjustments
 
 
 def _sample_records(df: Optional[pd.DataFrame], columns: Sequence[str], limit: int = 3) -> List[Dict[str, Any]]:
