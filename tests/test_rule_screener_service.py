@@ -696,6 +696,7 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         self.assertIn("量比：1.0 -> 0.95（中性日轻放宽）", result.report)
         self.assertTrue(any("震荡日" in note for note in result.profile_notes))
         self.assertTrue(any("量比" in note for note in result.profile_notes))
+        self.assertTrue(any("技术候选池已全部纳入 AI 复核" in note for note in result.profile_notes))
         self.assertEqual(
             result.stock_pool_notes,
             ["当前为技术/人工精选候选名单，未自动并入自选池，请人工确认后再决定是否加入。"],
@@ -706,7 +707,7 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
             ["300490", "300565"],
         )
 
-    def test_run_reviews_all_technical_pool_candidates_even_when_limit_is_positive(self) -> None:
+    def test_run_limits_technical_pool_ai_review_when_limit_is_positive(self) -> None:
         service = _build_service(
             config=AshareRuleConfig(ai_review_limit=1, auto_relax_if_empty=True),
             daily_history=pd.concat(
@@ -770,8 +771,9 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         self.assertEqual([item.code for item in result.candidates], ["300490", "300565"])
         self.assertEqual(
             pipeline.run.call_args.kwargs["stock_codes"],
-            ["300490", "300565"],
+            ["300490"],
         )
+        self.assertTrue(any("技术候选池仅复核前 1 只" in note for note in result.profile_notes))
 
     def test_run_uses_technical_pool_when_dynamic_relax_is_disabled(self) -> None:
         service = _build_service(
@@ -970,7 +972,7 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
             ["300490", "300565"],
         )
 
-    def test_run_respects_ai_review_limit_when_positive(self) -> None:
+    def test_run_keeps_all_full_hits_in_ai_review_when_limit_is_positive(self) -> None:
         strict_candidates = [
             _build_candidate("300490", name="华自科技", sector_name="基础化工", sector_change_pct=3.4),
             _build_candidate("300565", name="科信技术", sector_name="汽车零部件", sector_change_pct=3.1),
@@ -1007,8 +1009,60 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         self.assertEqual(len(result.candidates), 2)
         self.assertEqual(
             pipeline.run.call_args.kwargs["stock_codes"],
-            ["300490"],
+            ["300490", "300565"],
         )
+
+    def test_run_reviews_all_full_hits_and_only_top_technical_candidates(self) -> None:
+        strict_candidates = [
+            _build_candidate("300490", name="华自科技", sector_name="基础化工", sector_change_pct=3.4),
+            _build_candidate("300565", name="科信技术", sector_name="汽车零部件", sector_change_pct=3.1),
+        ]
+        technical_candidates = [
+            _build_candidate("000559", name="万向钱潮", sector_name="汽车零部件", sector_change_pct=0.8),
+            _build_candidate("600875", name="东方电气", sector_name="电力设备", sector_change_pct=0.7),
+        ]
+        service = _build_service(
+            config=AshareRuleConfig(ai_review_limit=1, auto_relax_if_empty=False),
+            daily_history=pd.concat(
+                [
+                    _build_matching_history("300490"),
+                    _build_matching_history("300565"),
+                    _build_matching_history("000559"),
+                    _build_matching_history("600875"),
+                ],
+                ignore_index=True,
+            ),
+            latest_turnover={"300490": 8.2, "300565": 7.6, "000559": 6.5, "600875": 5.2},
+        )
+        service.fetcher_manager.get_market_stats.return_value = {
+            "index_change": {"sh": 0.7, "sz": 0.8, "cyb": 0.9},
+            "up_count": 3200,
+            "down_count": 1800,
+            "limit_up_count": 72,
+            "limit_down_count": 4,
+            "sector_median": 0.6,
+        }
+        service._select_technical_candidates.return_value = ["300490", "300565", "000559", "600875"]
+        service._load_sector_snapshot.return_value = {
+            "300490": [{"name": "基础化工", "change_pct": 3.4}],
+            "300565": [{"name": "汽车零部件", "change_pct": 3.1}],
+            "000559": [{"name": "汽车零部件", "change_pct": 0.8}],
+            "600875": [{"name": "电力设备", "change_pct": 0.7}],
+        }
+
+        with patch("src.services.rule_screener_service.apply_selection_rules", return_value=strict_candidates), \
+             patch("src.services.rule_screener_service.build_technical_candidate_pool", return_value=technical_candidates), \
+             patch("src.core.pipeline.StockAnalysisPipeline") as pipeline_cls:
+            pipeline = pipeline_cls.return_value
+            pipeline.run.return_value = []
+
+            result = service.run(send_notification=False, ai_review=True)
+
+        self.assertEqual(
+            pipeline.run.call_args.kwargs["stock_codes"],
+            ["300490", "300565", "000559"],
+        )
+        self.assertTrue(any("技术候选池仅复核前 1 只" in note for note in result.profile_notes))
 
     def test_build_screening_report_contains_ai_review_summary(self) -> None:
         candidate = _build_candidate("000559", name="万向钱潮", sector_name="汽车零部件")

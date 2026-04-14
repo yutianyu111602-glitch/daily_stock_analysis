@@ -93,7 +93,7 @@ jobs:
           NEWS_STRATEGY_PROFILE: ${{ vars.NEWS_STRATEGY_PROFILE || secrets.NEWS_STRATEGY_PROFILE || 'short' }}
           REALTIME_SOURCE_PRIORITY: ${{ vars.REALTIME_SOURCE_PRIORITY || 'tushare,tencent,akshare_sina,efinance,akshare_em' }}
           GITHUB_TOKEN: ${{ github.token }}
-          RULE_SCREENER_AI_REVIEW_LIMIT: ${{ vars.RULE_SCREENER_AI_REVIEW_LIMIT || '8' }}
+          RULE_SCREENER_AI_REVIEW_LIMIT: ${{ vars.RULE_SCREENER_AI_REVIEW_LIMIT || '12' }}
           RULE_SCREENER_LOOKBACK_DAYS: ${{ vars.RULE_SCREENER_LOOKBACK_DAYS || '60' }}
           RULE_SCREENER_ABC_WINDOW_DAYS: ${{ vars.RULE_SCREENER_ABC_WINDOW_DAYS || '20' }}
           RULE_SCREENER_MAX_BIAS_MA5_PCT: ${{ vars.RULE_SCREENER_MAX_BIAS_MA5_PCT || '9' }}

@@ -37,7 +37,7 @@ class AshareRuleConfig:
     min_turnover_rate: float = 2.0
     min_sector_change_pct: float = 1.0
     max_bias_ma5_pct: float = 9.0
-    ai_review_limit: int = 0
+    ai_review_limit: int = 12
     sector_rank_top_n: int = 80
     notify_when_empty: bool = True
     exclude_st: bool = True
@@ -1108,7 +1108,7 @@ class AshareRuleScreenerService:
             lookback_days=int(os.getenv("RULE_SCREENER_LOOKBACK_DAYS", "60")),
             abc_window_days=int(os.getenv("RULE_SCREENER_ABC_WINDOW_DAYS", "20")),
             max_bias_ma5_pct=float(os.getenv("RULE_SCREENER_MAX_BIAS_MA5_PCT", "9")),
-            ai_review_limit=int(os.getenv("RULE_SCREENER_AI_REVIEW_LIMIT", "0")),
+            ai_review_limit=int(os.getenv("RULE_SCREENER_AI_REVIEW_LIMIT", "12")),
             sector_rank_top_n=int(os.getenv("RULE_SCREENER_SECTOR_TOP_N", "80")),
             exclude_st=os.getenv("RULE_SCREENER_EXCLUDE_ST", "true").lower() != "false",
             allow_open_data_fallback=os.getenv("RULE_SCREENER_ALLOW_FALLBACK", "false").lower() == "true",
@@ -1648,6 +1648,58 @@ class AshareRuleScreenerService:
     def _should_sync_stock_pool(self, *, send_notification: bool) -> bool:
         return send_notification
 
+    def _select_ai_review_candidates(
+        self,
+        grouped_candidates: RuleScreeningBuckets,
+        *,
+        technical_review_limit: int,
+    ) -> tuple[List[RuleScreeningCandidate], List[str]]:
+        review_candidates: List[RuleScreeningCandidate] = []
+        review_notes: List[str] = []
+        seen_codes: set[str] = set()
+
+        def append_unique(candidates: Sequence[RuleScreeningCandidate]) -> None:
+            for candidate in candidates:
+                if candidate.code in seen_codes:
+                    continue
+                seen_codes.add(candidate.code)
+                review_candidates.append(candidate)
+
+        core_candidates = list(grouped_candidates.full_hits) + list(grouped_candidates.relaxed_hits)
+        append_unique(core_candidates)
+
+        if grouped_candidates.technical_pool:
+            if technical_review_limit > 0:
+                technical_review_candidates = list(grouped_candidates.technical_pool[:technical_review_limit])
+                append_unique(technical_review_candidates)
+                if len(grouped_candidates.technical_pool) > len(technical_review_candidates):
+                    review_notes.append(
+                        "AI复核范围：完整命中/动态放宽命中全部保留；"
+                        f"技术候选池仅复核前 {len(technical_review_candidates)} 只，其余仅展示硬指标供人工精选。"
+                    )
+                else:
+                    review_notes.append(
+                        "AI复核范围：完整命中/动态放宽命中全部保留；技术候选池已全部纳入 AI 复核。"
+                    )
+            else:
+                append_unique(grouped_candidates.technical_pool)
+                review_notes.append("AI复核范围：完整命中/动态放宽命中与技术候选池全部纳入 AI 复核。")
+        elif grouped_candidates.manual_review_pool:
+            if technical_review_limit > 0:
+                manual_review_candidates = list(grouped_candidates.manual_review_pool[:technical_review_limit])
+                append_unique(manual_review_candidates)
+                if len(grouped_candidates.manual_review_pool) > len(manual_review_candidates):
+                    review_notes.append(
+                        f"AI复核范围：人工精选池仅复核前 {len(manual_review_candidates)} 只，其余仅展示硬指标供人工精选。"
+                    )
+                else:
+                    review_notes.append("AI复核范围：人工精选池已全部纳入 AI 复核。")
+            else:
+                append_unique(grouped_candidates.manual_review_pool)
+                review_notes.append("AI复核范围：人工精选池全部纳入 AI 复核。")
+
+        return review_candidates, review_notes
+
     def _resolve_market_regime(self) -> tuple[str, str]:
         snapshot: Dict[str, Any] = {}
         fetcher_manager = getattr(self, "fetcher_manager", None)
@@ -1914,15 +1966,15 @@ class AshareRuleScreenerService:
             from src.core.pipeline import StockAnalysisPipeline
 
             review_limit = max(int(active_config.ai_review_limit), 0)
-            review_candidates = (
-                list(display_candidates)
-                if grouped_candidates.technical_pool or review_limit == 0
-                else list(display_candidates[:review_limit])
+            review_candidates, review_notes = self._select_ai_review_candidates(
+                grouped_candidates,
+                technical_review_limit=review_limit,
             )
+            _append_unique_notes(profile_notes, review_notes)
             review_codes = [candidate.code for candidate in review_candidates]
             pipeline = StockAnalysisPipeline(
                 config=self.config,
-                max_workers=min(2, len(review_codes)) or 1,
+                max_workers=min(4, len(review_codes)) or 1,
             )
             ai_results = pipeline.run(
                 stock_codes=review_codes,
