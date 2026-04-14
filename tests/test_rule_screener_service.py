@@ -16,6 +16,7 @@ from src.services.rule_screener_service import (
     RuleScreeningCandidate,
     RuleScreeningBuckets,
     TurnoverSnapshot,
+    _detect_abc_pattern,
     _build_dynamic_rule_config,
     _build_sector_snapshot_from_tushare,
     _classify_market_regime,
@@ -75,9 +76,10 @@ def _build_candidate(
         turnover_rate=8.2,
         sector_name=sector_name,
         sector_change_pct=sector_change_pct,
+        sector_rank=3,
         prior_rise_pct=34.8,
         abc_pattern_confirmed=True,
-        notes=["放量站回20日线", "10日线、20日线保持朝上"],
+        notes=["放量站回20日线", "10日线、20日线保持朝上", "A低点 17.20，B高点 18.70（高于MA20 17.95），C低点 17.60（高于A低点）"],
     )
 
 
@@ -116,7 +118,7 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         matched = apply_selection_rules(
             daily_history=history,
             latest_turnover={"300490": 8.2},
-            sector_snapshot={"300490": [{"name": "化工", "change_pct": 3.4}]},
+            sector_snapshot={"300490": [{"name": "化工", "change_pct": 3.4, "rank": 3}]},
             config=config,
         )
 
@@ -132,7 +134,33 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         matched = apply_selection_rules(
             daily_history=history,
             latest_turnover={"300565": 7.6},
-            sector_snapshot={"300565": [{"name": "化工", "change_pct": 0.7}]},
+            sector_snapshot={"300565": [{"name": "化工", "change_pct": 0.7, "rank": 3}]},
+            config=config,
+        )
+
+        self.assertEqual(matched, [])
+
+    def test_apply_selection_rules_rejects_when_turnover_is_below_three_percent(self) -> None:
+        history = _build_matching_history("300565")
+        config = AshareRuleConfig()
+
+        matched = apply_selection_rules(
+            daily_history=history,
+            latest_turnover={"300565": 2.8},
+            sector_snapshot={"300565": [{"name": "化工", "change_pct": 2.1, "rank": 3}]},
+            config=config,
+        )
+
+        self.assertEqual(matched, [])
+
+    def test_apply_selection_rules_rejects_when_sector_rank_is_outside_top_five(self) -> None:
+        history = _build_matching_history("300565")
+        config = AshareRuleConfig()
+
+        matched = apply_selection_rules(
+            daily_history=history,
+            latest_turnover={"300565": 7.6},
+            sector_snapshot={"300565": [{"name": "化工", "change_pct": 2.1, "rank": 6}]},
             config=config,
         )
 
@@ -145,7 +173,7 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         matched = build_technical_candidate_pool(
             daily_history=history,
             latest_turnover={"300565": 7.6},
-            sector_snapshot={"300565": [{"name": "化工", "change_pct": 0.7}]},
+            sector_snapshot={"300565": [{"name": "化工", "change_pct": 0.7, "rank": 9}]},
             config=config,
         )
 
@@ -296,28 +324,22 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
 
         self.assertEqual(config.min_prior_rise_pct, 17.0)
         self.assertEqual(config.min_volume_ratio, 0.95)
-        self.assertEqual(config.min_turnover_rate, 1.8)
-        self.assertEqual(config.min_sector_change_pct, 0.8)
+        self.assertEqual(config.min_turnover_rate, 2.5)
+        self.assertEqual(config.min_sector_change_pct, 1.0)
         self.assertEqual(config.max_bias_ma5_pct, 9.5)
-        self.assertEqual(config.abc_min_pullback_pct, 4.0)
-        self.assertEqual(config.abc_min_rebound_pct, 2.0)
-        self.assertEqual(config.abc_min_c_leg_pct, 1.5)
-        self.assertEqual(config.abc_min_c_retention_ratio, 0.86)
-        self.assertEqual(config.abc_rebreak_buffer_pct, -0.2)
-        self.assertEqual(len(adjustments), 10)
+        self.assertEqual(config.abc_min_pullback_pct, base.abc_min_pullback_pct)
+        self.assertEqual(config.abc_min_rebound_pct, base.abc_min_rebound_pct)
+        self.assertEqual(config.abc_min_c_leg_pct, base.abc_min_c_leg_pct)
+        self.assertEqual(config.abc_min_c_retention_ratio, base.abc_min_c_retention_ratio)
+        self.assertEqual(config.abc_rebreak_buffer_pct, base.abc_rebreak_buffer_pct)
+        self.assertEqual(len(adjustments), 4)
         self.assertEqual(
             [item.name for item in adjustments],
             [
                 "前高前累计涨幅",
                 "量比",
                 "换手率",
-                "板块涨幅阈值",
                 "MA5乖离率",
-                "ABC-A段回撤阈值",
-                "ABC-B段反抽阈值",
-                "ABC-C段回踩阈值",
-                "ABC-C段保留比例",
-                "ABC再突破缓冲",
             ],
         )
 
@@ -328,15 +350,15 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
 
         self.assertEqual(config.min_prior_rise_pct, 16.0)
         self.assertEqual(config.min_volume_ratio, 0.9)
-        self.assertEqual(config.min_turnover_rate, 1.5)
-        self.assertEqual(config.min_sector_change_pct, 0.5)
+        self.assertEqual(config.min_turnover_rate, 2.0)
+        self.assertEqual(config.min_sector_change_pct, 1.0)
         self.assertEqual(config.max_bias_ma5_pct, 10.5)
-        self.assertEqual(config.abc_min_pullback_pct, 3.0)
-        self.assertEqual(config.abc_min_rebound_pct, 1.5)
-        self.assertEqual(config.abc_min_c_leg_pct, 1.0)
-        self.assertEqual(config.abc_min_c_retention_ratio, 0.80)
-        self.assertEqual(config.abc_rebreak_buffer_pct, -0.5)
-        self.assertEqual(len(adjustments), 10)
+        self.assertEqual(config.abc_min_pullback_pct, base.abc_min_pullback_pct)
+        self.assertEqual(config.abc_min_rebound_pct, base.abc_min_rebound_pct)
+        self.assertEqual(config.abc_min_c_leg_pct, base.abc_min_c_leg_pct)
+        self.assertEqual(config.abc_min_c_retention_ratio, base.abc_min_c_retention_ratio)
+        self.assertEqual(config.abc_rebreak_buffer_pct, base.abc_rebreak_buffer_pct)
+        self.assertEqual(len(adjustments), 4)
 
     def test_build_dynamic_rule_config_does_not_tighten_looser_base(self) -> None:
         base = AshareRuleConfig(
@@ -376,6 +398,9 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         self.assertIn("未筛出符合条件的A股股票", report)
         self.assertIn("5 日线乖离率 < 9%", report)
         self.assertIn("10 日线、20 日线保持朝上", report)
+        self.assertIn("所属板块涨幅 > 1%，且涨幅榜排名前 5", report)
+        self.assertIn("C浪低点高于A浪低点", report)
+        self.assertIn("B浪反弹高于20日线", report)
 
     def test_build_screening_report_renders_layered_sections(self) -> None:
         report = build_screening_report(
@@ -471,7 +496,7 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         )
 
         self.assertIn(
-            "所属板块涨幅 > 1%（人工精选池中改为排序参考，不作硬性剔除）",
+            "所属板块涨幅 > 1%，且涨幅榜排名前 5（人工精选池中改为排序参考，不作硬性剔除）",
             report,
         )
 
@@ -487,9 +512,65 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         )
 
         self.assertIn(
-            "所属板块涨幅 > 1%（完整/放宽命中时适用；技术候选池仅供参考，不作硬性剔除）",
+            "所属板块涨幅 > 1%，且涨幅榜排名前 5（完整/放宽命中时适用；技术候选池仅供参考，不作硬性剔除）",
             report,
         )
+
+    def test_build_sector_snapshot_from_tushare_assigns_sector_rank(self) -> None:
+        index_member_df = pd.DataFrame(
+            [
+                {
+                    "ts_code": "300490.SZ",
+                    "l1_code": "801730.SI",
+                    "l1_name": "电力设备",
+                    "in_date": "20200101",
+                    "out_date": "",
+                }
+            ]
+        )
+        sw_daily_df = pd.DataFrame(
+            [
+                {"ts_code": "801780.SI", "name": "银行", "pct_change": 4.2},
+                {"ts_code": "801710.SI", "name": "钢铁", "pct_change": 3.5},
+                {"ts_code": "801730.SI", "name": "电力设备", "pct_change": 2.1},
+            ]
+        )
+
+        snapshot = _build_sector_snapshot_from_tushare(
+            index_member_df=index_member_df,
+            sw_daily_df=sw_daily_df,
+            candidate_codes=["300490"],
+            trade_date="20260413",
+        )
+
+        self.assertEqual(snapshot["300490"][0]["rank"], 3)
+
+    def test_detect_abc_pattern_requires_c_low_above_a_low_and_b_above_ma20(self) -> None:
+        closes_with_weak_c = [
+            10.0, 10.6, 11.3, 12.1, 13.0, 14.0, 15.1, 16.3, 17.6, 18.8,
+            20.0, 18.2, 16.0, 17.2, 18.4, 17.4, 15.7, 16.8, 18.1, 19.4, 20.6,
+        ]
+        closes_with_weak_b = [
+            10.0, 10.6, 11.3, 12.1, 13.0, 14.0, 15.1, 16.3, 17.6, 18.8,
+            20.0, 18.2, 16.0, 17.2, 18.4, 17.4, 16.5, 17.4, 18.1, 19.4, 20.6,
+        ]
+        weak_c_result = _detect_abc_pattern(
+            closes_with_weak_c,
+            ma20_values=[16.0] * len(closes_with_weak_c),
+            abc_window_days=len(closes_with_weak_c),
+        )
+        weak_b_result = _detect_abc_pattern(
+            closes_with_weak_b,
+            ma20_values=[19.0] * len(closes_with_weak_b),
+            abc_window_days=len(closes_with_weak_b),
+        )
+
+        self.assertFalse(weak_c_result.confirmed)
+        self.assertFalse(weak_c_result.c_low_higher_than_a_low)
+        self.assertTrue(weak_c_result.b_high_above_ma20)
+        self.assertFalse(weak_b_result.confirmed)
+        self.assertTrue(weak_b_result.c_low_higher_than_a_low)
+        self.assertFalse(weak_b_result.b_high_above_ma20)
 
     def test_build_screening_report_preserves_decimal_thresholds(self) -> None:
         report = build_screening_report(
@@ -518,7 +599,7 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         self.assertIn("前期累计涨幅不少于 18%", report)
         self.assertIn("量比：1.0 -> 1.25（更细粒度放宽）", report)
         self.assertIn("量比 > 1.25，换手率 > 4.25%", report)
-        self.assertIn("所属板块涨幅 > 0.8%（完整/放宽命中时适用；技术候选池仅供参考，不作硬性剔除）", report)
+        self.assertIn("所属板块涨幅 > 0.8%，且涨幅榜排名前 5（完整/放宽命中时适用；技术候选池仅供参考，不作硬性剔除）", report)
         self.assertIn("5 日线乖离率 < 8.55%", report)
         self.assertIn("10 日线、20 日线保持朝上", report)
 
@@ -1393,7 +1474,7 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
                 self.assertEqual([item.code for item in result.candidates], ["300565"])
                 self.assertIn("人工精选池（1 只）", result.report)
                 self.assertIn("板块数据缺失，仅供人工判断", result.report)
-                self.assertIn("未满足条件：所属板块涨幅未达到 0.8%", result.report)
+                self.assertIn("未满足条件：所属板块涨幅未达到 1%", result.report)
                 self.assertTrue(any("板块数据缺失，仅供人工判断" in note for note in result.profile_notes))
 
 
