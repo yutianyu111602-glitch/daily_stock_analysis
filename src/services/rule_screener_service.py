@@ -66,6 +66,11 @@ class RuleScreeningCandidate:
     prior_rise_pct: float
     abc_pattern_confirmed: bool
     sector_rank: int = 0
+    abc_a_low_price: float = 0.0
+    abc_b_high_price: float = 0.0
+    abc_c_low_price: float = 0.0
+    abc_b_high_ma20: float = 0.0
+    father_priority_score: float = 0.0
     matched_condition_count: int = 0
     total_condition_count: int = 0
     failed_conditions: List[str] = field(default_factory=list)
@@ -478,6 +483,10 @@ def _build_candidate(
         prior_rise_pct=round(evaluation["prior_rise_pct"], 2),
         abc_pattern_confirmed=evaluation["abc_pattern_confirmed"],
         sector_rank=int(evaluation["sector_rank"]),
+        abc_a_low_price=round(evaluation["abc_a_low_price"], 2),
+        abc_b_high_price=round(evaluation["abc_b_high_price"], 2),
+        abc_c_low_price=round(evaluation["abc_c_low_price"], 2),
+        abc_b_high_ma20=round(evaluation["abc_b_high_ma20"], 2),
         matched_condition_count=evaluation["matched_condition_count"],
         total_condition_count=evaluation["total_condition_count"],
         failed_conditions=list(evaluation["failed_conditions"]),
@@ -834,6 +843,73 @@ def _classify_market_regime(snapshot: Dict[str, Any]) -> str:
     return "neutral"
 
 
+def _rank_candidates_for_father(
+    candidates: Sequence[RuleScreeningCandidate],
+) -> List[RuleScreeningCandidate]:
+    def clamp(value: float, minimum: float = 0.0, maximum: float = 100.0) -> float:
+        return max(minimum, min(maximum, value))
+
+    def score_turnover(turnover_rate: float) -> float:
+        return clamp(12.0 - abs(turnover_rate - 5.5) * 2.2, maximum=12.0)
+
+    def score_volume_ratio(volume_ratio: float) -> float:
+        return clamp(10.0 - abs(volume_ratio - 1.6) * 6.0, maximum=10.0)
+
+    def score_prior_rise(prior_rise_pct: float) -> float:
+        return clamp(12.0 - abs(prior_rise_pct - 30.0) * 0.35, maximum=12.0)
+
+    def score_ma20_proximity(close: float, ma20: float) -> float:
+        if ma20 <= 0:
+            return 0.0
+        premium_pct = (close / ma20 - 1.0) * 100.0
+        return clamp(14.0 - abs(premium_pct - 3.0) * 2.5, maximum=14.0)
+
+    def score_sector_rank(sector_rank: int) -> float:
+        if sector_rank <= 0:
+            return 0.0
+        return clamp(24.0 - min(sector_rank, 120) * 0.18, maximum=24.0)
+
+    def score_sector_strength(sector_change_pct: float) -> float:
+        return clamp(max(sector_change_pct, 0.0) * 3.5, maximum=14.0)
+
+    def score_abc_structure(candidate: RuleScreeningCandidate) -> float:
+        score = 0.0
+        if candidate.abc_a_low_price > 0 and candidate.abc_c_low_price > 0:
+            c_support_pct = (candidate.abc_c_low_price / candidate.abc_a_low_price - 1.0) * 100.0
+            score += clamp(c_support_pct * 1.5, maximum=8.0)
+        if candidate.abc_b_high_ma20 > 0 and candidate.abc_b_high_price > 0:
+            b_breakout_pct = (candidate.abc_b_high_price / candidate.abc_b_high_ma20 - 1.0) * 100.0
+            score += clamp(b_breakout_pct * 1.2, maximum=8.0)
+        return score
+
+    ranked: List[RuleScreeningCandidate] = []
+    for candidate in candidates:
+        total_score = (
+            score_sector_rank(int(candidate.sector_rank))
+            + score_sector_strength(candidate.sector_change_pct)
+            + score_turnover(candidate.turnover_rate)
+            + score_volume_ratio(candidate.volume_ratio)
+            + score_ma20_proximity(candidate.close, candidate.ma20)
+            + score_prior_rise(candidate.prior_rise_pct)
+            + score_abc_structure(candidate)
+        )
+        candidate.father_priority_score = round(total_score, 2)
+        ranked.append(candidate)
+
+    return sorted(
+        ranked,
+        key=lambda item: (
+            item.father_priority_score,
+            -(item.sector_rank or 10_000),
+            item.sector_change_pct,
+            -abs(item.turnover_rate - 5.5),
+            -abs(item.volume_ratio - 1.6),
+            -abs(item.prior_rise_pct - 30.0),
+        ),
+        reverse=True,
+    )
+
+
 def _build_dynamic_rule_config(
     base: AshareRuleConfig,
     market_regime: str,
@@ -957,16 +1033,7 @@ def build_technical_candidate_pool(
         if candidate is not None:
             candidates.append(candidate)
 
-    return sorted(
-        candidates,
-        key=lambda item: (
-            item.volume_ratio,
-            item.turnover_rate,
-            item.prior_rise_pct,
-            item.sector_change_pct,
-        ),
-        reverse=True,
-    )
+    return _rank_candidates_for_father(candidates)
 
 
 def build_manual_review_pool(
@@ -1036,6 +1103,10 @@ def build_manual_review_pool(
                 prior_rise_pct=round(evaluation["prior_rise_pct"], 2),
                 abc_pattern_confirmed=evaluation["abc_pattern_confirmed"],
                 sector_rank=int(evaluation["sector_rank"]),
+                abc_a_low_price=round(evaluation["abc_a_low_price"], 2),
+                abc_b_high_price=round(evaluation["abc_b_high_price"], 2),
+                abc_c_low_price=round(evaluation["abc_c_low_price"], 2),
+                abc_b_high_ma20=round(evaluation["abc_b_high_ma20"], 2),
                 matched_condition_count=evaluation["matched_condition_count"],
                 total_condition_count=evaluation["total_condition_count"],
                 failed_conditions=list(evaluation["failed_conditions"]),
@@ -1043,7 +1114,7 @@ def build_manual_review_pool(
             )
         )
 
-    return sorted(
+    return _rank_candidates_for_father(sorted(
         candidates,
         key=lambda item: (
             item.matched_condition_count,
@@ -1054,7 +1125,7 @@ def build_manual_review_pool(
             item.prior_rise_pct,
         ),
         reverse=True,
-    )[: max(int(limit), 0)]
+    ))[: max(int(limit), 0)]
 
 
 def build_screening_report(
@@ -1124,6 +1195,41 @@ def build_screening_report(
                 candidate_lines.append(f"   - 未满足条件：{'；'.join(candidate.failed_conditions)}")
             candidate_lines.append(f"   - 规则说明：{'；'.join(candidate.notes)}")
             lines.extend(candidate_lines)
+        lines.append("")
+
+    def append_focus_section(section_candidates: Sequence[RuleScreeningCandidate]) -> None:
+        focus_candidates = _rank_candidates_for_father(list(section_candidates))[:10]
+        if len(focus_candidates) < 10:
+            return
+
+        lines.extend(
+            [
+                "## 优先关注（前 10 只）",
+                "",
+            ]
+        )
+        for idx, candidate in enumerate(focus_candidates, start=1):
+            ma20_premium_pct = ((candidate.close / candidate.ma20 - 1.0) * 100.0) if candidate.ma20 > 0 else 0.0
+            c_support_pct = ((candidate.abc_c_low_price / candidate.abc_a_low_price - 1.0) * 100.0) if candidate.abc_a_low_price > 0 else 0.0
+            b_breakout_pct = ((candidate.abc_b_high_price / candidate.abc_b_high_ma20 - 1.0) * 100.0) if candidate.abc_b_high_ma20 > 0 else 0.0
+            lines.extend(
+                [
+                    f"{idx}. {candidate.name} ({candidate.code}) | 优先分 {candidate.father_priority_score:.1f}",
+                    (
+                        f"   - 板块强度：{candidate.sector_name or '暂无板块数据'}"
+                        f"（{candidate.sector_change_pct:+.2f}%，第 {candidate.sector_rank or '-'} 名）"
+                    ),
+                    (
+                        f"   - 价量位置：现价 {candidate.close:.2f}，高于MA20 {ma20_premium_pct:.2f}%"
+                        f"，量比 {candidate.volume_ratio:.2f}，换手率 {candidate.turnover_rate:.2f}%"
+                    ),
+                    (
+                        f"   - 结构质量：前高前涨幅 {candidate.prior_rise_pct:.2f}%"
+                        f"，C高于A {c_support_pct:.2f}%"
+                        f"，B高于MA20 {b_breakout_pct:.2f}%"
+                    ),
+                ]
+            )
         lines.append("")
 
     rule_config = rule_config or AshareRuleConfig()
@@ -1197,6 +1303,7 @@ def build_screening_report(
             lines.extend(f"- {line}" for line in stock_pool_notes)
         return "\n".join(lines)
 
+    append_focus_section(grouped_candidates.technical_pool)
     append_candidate_section("完整命中", grouped_candidates.full_hits)
     append_candidate_section("动态放宽命中", grouped_candidates.relaxed_hits)
     append_candidate_section("技术候选池", grouped_candidates.technical_pool)

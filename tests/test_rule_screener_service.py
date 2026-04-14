@@ -17,6 +17,7 @@ from src.services.rule_screener_service import (
     RuleScreeningBuckets,
     TurnoverSnapshot,
     _detect_abc_pattern,
+    _rank_candidates_for_father,
     _build_dynamic_rule_config,
     _build_sector_snapshot_from_tushare,
     _classify_market_regime,
@@ -80,6 +81,10 @@ def _build_candidate(
         prior_rise_pct=34.8,
         abc_pattern_confirmed=True,
         notes=["放量站回20日线", "10日线、20日线保持朝上", "A低点 17.20，B高点 18.70（高于MA20 17.95），C低点 17.60（高于A低点）"],
+        abc_a_low_price=17.20,
+        abc_b_high_price=18.70,
+        abc_c_low_price=17.60,
+        abc_b_high_ma20=17.95,
     )
 
 
@@ -426,6 +431,61 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         self.assertIn("万向钱潮 (000559)", report)
         self.assertIn("华自科技 (300490)", report)
         self.assertNotIn("未筛出符合条件的A股股票", report)
+
+    def test_rank_candidates_for_father_prefers_stronger_sector_and_ma20_proximity(self) -> None:
+        preferred = _build_candidate("300490", name="华自科技", sector_name="电子", sector_change_pct=2.8)
+        preferred.sector_rank = 12
+        preferred.volume_ratio = 1.8
+        preferred.turnover_rate = 6.2
+        preferred.close = 20.4
+        preferred.ma20 = 19.8
+        preferred.prior_rise_pct = 28.0
+        preferred.abc_a_low_price = 18.6
+        preferred.abc_b_high_price = 20.1
+        preferred.abc_b_high_ma20 = 19.5
+        preferred.abc_c_low_price = 18.9
+
+        weaker = _build_candidate("600010", name="包钢股份", sector_name="钢铁", sector_change_pct=1.2)
+        weaker.sector_rank = 108
+        weaker.volume_ratio = 2.4
+        weaker.turnover_rate = 10.5
+        weaker.close = 6.0
+        weaker.ma20 = 5.2
+        weaker.prior_rise_pct = 62.0
+        weaker.abc_a_low_price = 4.8
+        weaker.abc_b_high_price = 5.9
+        weaker.abc_b_high_ma20 = 5.0
+        weaker.abc_c_low_price = 5.4
+
+        ranked = _rank_candidates_for_father([weaker, preferred])
+
+        self.assertEqual([item.code for item in ranked], ["300490", "600010"])
+        self.assertGreater(ranked[0].father_priority_score, ranked[1].father_priority_score)
+
+    def test_build_screening_report_adds_top_focus_section_for_large_technical_pool(self) -> None:
+        technical_candidates = []
+        for idx in range(12):
+            candidate = _build_candidate(
+                f"{300490 + idx}",
+                name=f"样本股{idx + 1}",
+                sector_name="电子",
+                sector_change_pct=2.6 - idx * 0.05,
+            )
+            candidate.sector_rank = idx + 1
+            candidate.volume_ratio = 2.2 - idx * 0.05
+            candidate.turnover_rate = 7.0 - idx * 0.1
+            candidate.close = 20.0 + idx
+            candidate.ma20 = 19.5 + idx
+            technical_candidates.append(candidate)
+
+        report = build_screening_report(
+            candidates=[],
+            report_date="2026-04-13",
+            grouped_candidates=RuleScreeningBuckets(technical_pool=technical_candidates),
+        )
+
+        self.assertIn("## 优先关注（前 10 只）", report)
+        self.assertIn("样本股1 (300490)", report)
 
     def test_build_screening_report_renders_layered_sections_from_dataclass(self) -> None:
         report = build_screening_report(
