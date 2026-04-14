@@ -77,7 +77,7 @@ def _build_candidate(
         sector_change_pct=sector_change_pct,
         prior_rise_pct=34.8,
         abc_pattern_confirmed=True,
-        notes=["放量站回20日线", "5/10/20日线多头排列"],
+        notes=["放量站回20日线", "10日线、20日线保持朝上"],
     )
 
 
@@ -132,7 +132,7 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         matched = apply_selection_rules(
             daily_history=history,
             latest_turnover={"300565": 7.6},
-            sector_snapshot={"300565": [{"name": "化工", "change_pct": 1.3}]},
+            sector_snapshot={"300565": [{"name": "化工", "change_pct": 0.7}]},
             config=config,
         )
 
@@ -145,7 +145,7 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         matched = build_technical_candidate_pool(
             daily_history=history,
             latest_turnover={"300565": 7.6},
-            sector_snapshot={"300565": [{"name": "化工", "change_pct": 1.3}]},
+            sector_snapshot={"300565": [{"name": "化工", "change_pct": 0.7}]},
             config=config,
         )
 
@@ -285,23 +285,20 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         self.assertIsNot(config, base)
         self.assertEqual(config.min_volume_ratio, base.min_volume_ratio)
         self.assertEqual(config.min_turnover_rate, base.min_turnover_rate)
-        self.assertEqual(config.min_sector_change_pct, 1.5)
+        self.assertEqual(config.min_sector_change_pct, base.min_sector_change_pct)
         self.assertEqual(config.max_bias_ma5_pct, base.max_bias_ma5_pct)
-        self.assertEqual(len(adjustments), 1)
-        self.assertEqual(adjustments[0].name, "板块涨幅阈值")
-        self.assertEqual(adjustments[0].from_value, 2.0)
-        self.assertEqual(adjustments[0].to_value, 1.5)
+        self.assertEqual(adjustments, [])
 
     def test_build_dynamic_rule_config_neutral_relaxes_secondary_thresholds(self) -> None:
         base = AshareRuleConfig()
 
         config, adjustments = _build_dynamic_rule_config(base, "neutral")
 
-        self.assertEqual(config.min_prior_rise_pct, 18.0)
-        self.assertEqual(config.min_volume_ratio, 1.3)
-        self.assertEqual(config.min_turnover_rate, 4.5)
-        self.assertEqual(config.min_sector_change_pct, 1.2)
-        self.assertEqual(config.max_bias_ma5_pct, 8.5)
+        self.assertEqual(config.min_prior_rise_pct, 17.0)
+        self.assertEqual(config.min_volume_ratio, 0.95)
+        self.assertEqual(config.min_turnover_rate, 1.8)
+        self.assertEqual(config.min_sector_change_pct, 0.8)
+        self.assertEqual(config.max_bias_ma5_pct, 9.5)
         self.assertEqual(config.abc_min_pullback_pct, 4.0)
         self.assertEqual(config.abc_min_rebound_pct, 2.0)
         self.assertEqual(config.abc_min_c_leg_pct, 1.5)
@@ -329,25 +326,25 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
 
         config, adjustments = _build_dynamic_rule_config(base, "weak")
 
-        self.assertEqual(config.min_prior_rise_pct, 18.0)
-        self.assertEqual(config.min_volume_ratio, 1.2)
-        self.assertEqual(config.min_turnover_rate, 4.0)
-        self.assertEqual(config.min_sector_change_pct, 0.8)
-        self.assertEqual(config.max_bias_ma5_pct, 9.0)
-        self.assertEqual(config.abc_min_pullback_pct, 3.5)
+        self.assertEqual(config.min_prior_rise_pct, 16.0)
+        self.assertEqual(config.min_volume_ratio, 0.9)
+        self.assertEqual(config.min_turnover_rate, 1.5)
+        self.assertEqual(config.min_sector_change_pct, 0.5)
+        self.assertEqual(config.max_bias_ma5_pct, 10.5)
+        self.assertEqual(config.abc_min_pullback_pct, 3.0)
         self.assertEqual(config.abc_min_rebound_pct, 1.5)
         self.assertEqual(config.abc_min_c_leg_pct, 1.0)
-        self.assertEqual(config.abc_min_c_retention_ratio, 0.82)
-        self.assertEqual(config.abc_rebreak_buffer_pct, -0.4)
+        self.assertEqual(config.abc_min_c_retention_ratio, 0.80)
+        self.assertEqual(config.abc_rebreak_buffer_pct, -0.5)
         self.assertEqual(len(adjustments), 10)
 
     def test_build_dynamic_rule_config_does_not_tighten_looser_base(self) -> None:
         base = AshareRuleConfig(
             min_prior_rise_pct=17.0,
-            min_volume_ratio=1.1,
-            min_turnover_rate=3.8,
+            min_volume_ratio=0.9,
+            min_turnover_rate=1.5,
             min_sector_change_pct=0.6,
-            max_bias_ma5_pct=9.2,
+            max_bias_ma5_pct=9.8,
             abc_min_pullback_pct=3.0,
             abc_min_rebound_pct=1.0,
             abc_min_c_leg_pct=0.8,
@@ -358,10 +355,10 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         config, adjustments = _build_dynamic_rule_config(base, "neutral")
 
         self.assertEqual(config.min_prior_rise_pct, 17.0)
-        self.assertEqual(config.min_volume_ratio, 1.1)
-        self.assertEqual(config.min_turnover_rate, 3.8)
+        self.assertEqual(config.min_volume_ratio, 0.9)
+        self.assertEqual(config.min_turnover_rate, 1.5)
         self.assertEqual(config.min_sector_change_pct, 0.6)
-        self.assertEqual(config.max_bias_ma5_pct, 9.2)
+        self.assertEqual(config.max_bias_ma5_pct, 9.8)
         self.assertEqual(config.abc_min_pullback_pct, 3.0)
         self.assertEqual(config.abc_min_rebound_pct, 1.0)
         self.assertEqual(config.abc_min_c_leg_pct, 0.8)
@@ -377,7 +374,8 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
 
         self.assertIn("2026-04-13", report)
         self.assertIn("未筛出符合条件的A股股票", report)
-        self.assertIn("5 日线乖离率 < 8%", report)
+        self.assertIn("5 日线乖离率 < 9%", report)
+        self.assertIn("10 日线、20 日线保持朝上", report)
 
     def test_build_screening_report_renders_layered_sections(self) -> None:
         report = build_screening_report(
@@ -390,12 +388,12 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
             },
             market_regime_label="震荡偏强",
             dynamic_adjustments=[
-                "板块强度阈值 2.0% -> 1.5%（严格档无结果，进入动态放宽观察）",
+                "板块强度阈值 1.0% -> 0.8%（严格档无结果，进入动态放宽观察）",
             ],
         )
 
         self.assertIn("市场环境：震荡偏强", report)
-        self.assertIn("板块强度阈值 2.0% -> 1.5%（严格档无结果，进入动态放宽观察）", report)
+        self.assertIn("板块强度阈值 1.0% -> 0.8%（严格档无结果，进入动态放宽观察）", report)
         self.assertIn("## 完整命中（1 只）", report)
         self.assertIn("## 动态放宽命中（1 只）", report)
         self.assertIn("## 技术候选池（1 只）", report)
@@ -426,8 +424,8 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         candidate = _build_candidate("600010", name="包钢股份", sector_name="钢铁", sector_change_pct=1.21)
         candidate.matched_condition_count = 7
         candidate.total_condition_count = 8
-        candidate.failed_conditions = ["前高前累计涨幅未达到 20%"]
-        candidate.notes.append("未满足条件：前高前累计涨幅未达到 20%")
+        candidate.failed_conditions = ["前高前累计涨幅未达到 18%"]
+        candidate.notes.append("未满足条件：前高前累计涨幅未达到 18%")
 
         report = build_screening_report(
             candidates=[],
@@ -437,7 +435,7 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
 
         self.assertIn("## 人工精选池（1 只）", report)
         self.assertIn("条件命中：7/8", report)
-        self.assertIn("未满足条件：前高前累计涨幅未达到 20%", report)
+        self.assertIn("未满足条件：前高前累计涨幅未达到 18%", report)
 
     def test_build_screening_report_only_outputs_empty_copy_when_all_buckets_are_empty(self) -> None:
         empty_report = build_screening_report(
@@ -473,7 +471,7 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         )
 
         self.assertIn(
-            "所属板块涨幅 > 2%（人工精选池中改为排序参考，不作硬性剔除）",
+            "所属板块涨幅 > 1%（人工精选池中改为排序参考，不作硬性剔除）",
             report,
         )
 
@@ -489,7 +487,7 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         )
 
         self.assertIn(
-            "所属板块涨幅 > 2%（完整/放宽命中时适用；技术候选池仅供参考，不作硬性剔除）",
+            "所属板块涨幅 > 1%（完整/放宽命中时适用；技术候选池仅供参考，不作硬性剔除）",
             report,
         )
 
@@ -510,7 +508,7 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
             dynamic_adjustments=[
                 DynamicAdjustment(
                     name="量比",
-                    from_value=1.5,
+                    from_value=1.0,
                     to_value=1.25,
                     reason="更细粒度放宽",
                 )
@@ -518,10 +516,11 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         )
 
         self.assertIn("前期累计涨幅不少于 18%", report)
-        self.assertIn("量比：1.5 -> 1.25（更细粒度放宽）", report)
+        self.assertIn("量比：1.0 -> 1.25（更细粒度放宽）", report)
         self.assertIn("量比 > 1.25，换手率 > 4.25%", report)
         self.assertIn("所属板块涨幅 > 0.8%（完整/放宽命中时适用；技术候选池仅供参考，不作硬性剔除）", report)
         self.assertIn("5 日线乖离率 < 8.55%", report)
+        self.assertIn("10 日线、20 日线保持朝上", report)
 
     def test_build_screening_report_rejects_conflicting_candidate_sources(self) -> None:
         with self.assertRaises(ValueError):
@@ -549,14 +548,14 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
             dynamic_adjustments=[
                 DynamicAdjustment(
                     name="板块强度阈值",
-                    from_value=2.0,
-                    to_value=1.5,
+                    from_value=1.0,
+                    to_value=0.8,
                     reason="严格档无结果",
                 )
             ],
         )
 
-        self.assertIn("板块强度阈值：2.0 -> 1.5（严格档无结果）", report)
+        self.assertIn("板块强度阈值：1.0 -> 0.8（严格档无结果）", report)
 
     def test_run_uses_market_regime_driven_dynamic_rule_config_when_strict_is_empty(self) -> None:
         service = _build_service(config=AshareRuleConfig(auto_relax_if_empty=True))
@@ -581,15 +580,15 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
             build_dynamic.return_value = (
                 AshareRuleConfig(
                     auto_relax_if_empty=False,
-                    min_volume_ratio=1.2,
-                    min_turnover_rate=4.0,
+                    min_volume_ratio=0.9,
+                    min_turnover_rate=1.5,
                     min_sector_change_pct=0.8,
                     max_bias_ma5_pct=9.0,
                 ),
                 [
                     DynamicAdjustment(
                         name="板块涨幅阈值",
-                        from_value=2.0,
+                        from_value=1.0,
                         to_value=0.8,
                         reason="弱势日放宽板块强度",
                     )
@@ -602,7 +601,7 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         self.assertEqual([item.code for item in result.candidates], ["300565"])
         self.assertIn("动态放宽命中（1 只）", result.report)
         self.assertIn("市场环境：弱势日", result.report)
-        self.assertIn("板块涨幅阈值：2.0 -> 0.8（弱势日放宽板块强度）", result.report)
+        self.assertIn("板块涨幅阈值：1.0 -> 0.8（弱势日放宽板块强度）", result.report)
         self.assertTrue(any("弱势日" in note for note in result.profile_notes))
         self.assertTrue(any("板块涨幅阈值" in note for note in result.profile_notes))
         service._sync_candidates_to_stock_pool.assert_called_once_with([relaxed_candidate])
@@ -679,8 +678,8 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
                 [
                     DynamicAdjustment(
                         name="量比",
-                        from_value=1.5,
-                        to_value=1.3,
+                        from_value=1.0,
+                        to_value=0.95,
                         reason="中性日轻放宽",
                     )
                 ],
@@ -694,7 +693,7 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         self.assertIn("## 技术候选池（2 只）", result.report)
         self.assertNotIn("未筛出符合条件的A股股票", result.report)
         self.assertIn("市场环境：震荡日", result.report)
-        self.assertIn("量比：1.5 -> 1.3（中性日轻放宽）", result.report)
+        self.assertIn("量比：1.0 -> 0.95（中性日轻放宽）", result.report)
         self.assertTrue(any("震荡日" in note for note in result.profile_notes))
         self.assertTrue(any("量比" in note for note in result.profile_notes))
         self.assertEqual(
@@ -757,8 +756,8 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
                 [
                     DynamicAdjustment(
                         name="量比",
-                        from_value=1.5,
-                        to_value=1.3,
+                        from_value=1.0,
+                        to_value=0.95,
                         reason="中性日轻放宽",
                     )
                 ],
@@ -824,7 +823,7 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         manual_candidate = _build_candidate("600010", name="包钢股份", sector_name="钢铁", sector_change_pct=1.21)
         manual_candidate.matched_condition_count = 7
         manual_candidate.total_condition_count = 8
-        manual_candidate.failed_conditions = ["前高前累计涨幅未达到 20%"]
+        manual_candidate.failed_conditions = ["前高前累计涨幅未达到 18%"]
 
         with patch("src.services.rule_screener_service.apply_selection_rules", return_value=[]), \
              patch("src.services.rule_screener_service.build_manual_review_pool", return_value=[manual_candidate]), \

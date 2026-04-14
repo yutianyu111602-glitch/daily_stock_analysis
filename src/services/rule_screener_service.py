@@ -32,11 +32,11 @@ logger = logging.getLogger(__name__)
 class AshareRuleConfig:
     lookback_days: int = 60
     abc_window_days: int = 20
-    min_prior_rise_pct: float = 20.0
-    min_volume_ratio: float = 1.5
-    min_turnover_rate: float = 5.0
-    min_sector_change_pct: float = 2.0
-    max_bias_ma5_pct: float = 8.0
+    min_prior_rise_pct: float = 18.0
+    min_volume_ratio: float = 1.0
+    min_turnover_rate: float = 2.0
+    min_sector_change_pct: float = 1.0
+    max_bias_ma5_pct: float = 9.0
     ai_review_limit: int = 0
     sector_rank_top_n: int = 80
     notify_when_empty: bool = True
@@ -365,7 +365,7 @@ def _build_candidate(
         f"收盘站上 MA20，现价 {evaluation['close']:.2f} / MA20 {evaluation['ma20']:.2f}",
         f"量比 {evaluation['volume_ratio']:.2f}，换手率 {evaluation['turnover_rate']:.2f}%",
         f"{evaluation['sector_name'] or '板块数据暂缺'} 涨幅 {evaluation['sector_change_pct']:.2f}%",
-        f"MA5 乖离率 {evaluation['bias_ma5_pct']:.2f}% ，均线多头排列",
+        f"MA5 乖离率 {evaluation['bias_ma5_pct']:.2f}% ，10日线/20日线保持朝上",
     ]
     if not evaluation["turnover_known"]:
         notes.append("换手率数据缺失，仅供人工判断")
@@ -575,7 +575,7 @@ def _format_adjustment_value(value: float) -> str:
 def _condition_label_map(config: AshareRuleConfig) -> Dict[str, str]:
     return {
         "close_gt_ma20": "收盘未重新站上20日均线",
-        "ma_bull": "MA5/MA10/MA20 未多头排列",
+        "ma_bull": "10日线、20日线未保持朝上",
         "bias_ok": f"MA5乖离率未回到 {_format_rule_threshold(config.max_bias_ma5_pct)}% 以内",
         "volume_ok": f"量比未达到 {_format_rule_threshold(config.min_volume_ratio)}",
         "turnover_ok": f"换手率未达到 {_format_rule_threshold(config.min_turnover_rate)}%",
@@ -604,6 +604,8 @@ def _evaluate_candidate_conditions(
     ma5 = float(latest["ma5"])
     ma10 = float(latest["ma10"])
     ma20 = float(latest["ma20"])
+    prev_ma10 = float(group.iloc[-2]["ma10"]) if len(group) >= 2 and pd.notna(group.iloc[-2].get("ma10")) else ma10
+    prev_ma20 = float(group.iloc[-2]["ma20"]) if len(group) >= 2 and pd.notna(group.iloc[-2].get("ma20")) else ma20
     bias_ma5_pct = float(latest["bias_ma5_pct"])
     volume_ratio = float(latest["volume_ratio"])
     turnover_snapshot = _coerce_turnover_snapshot(latest_turnover)
@@ -622,7 +624,7 @@ def _evaluate_candidate_conditions(
 
     checks = {
         "close_gt_ma20": close > ma20,
-        "ma_bull": ma5 > ma10 > ma20,
+        "ma_bull": ma10 >= prev_ma10 and ma20 >= prev_ma20,
         "bias_ok": bias_ma5_pct < config.max_bias_ma5_pct,
         "volume_ok": volume_ratio >= config.min_volume_ratio,
         "turnover_ok": turnover_rate >= config.min_turnover_rate if turnover_known else True,
@@ -761,27 +763,27 @@ def _build_dynamic_rule_config(
             direction="loosen_min",
         )
     elif normalized_regime == "neutral":
-        apply_adjustment("min_prior_rise_pct", 18.0, "前高前累计涨幅", "中性日保留主升浪容错", direction="loosen_min")
-        apply_adjustment("min_volume_ratio", 1.3, "量比", "中性日轻放宽", direction="loosen_min")
-        apply_adjustment("min_turnover_rate", 4.5, "换手率", "中性日轻放宽", direction="loosen_min")
-        apply_adjustment("min_sector_change_pct", 1.2, "板块涨幅阈值", "中性日轻放宽", direction="loosen_min")
-        apply_adjustment("max_bias_ma5_pct", 8.5, "MA5乖离率", "中性日轻放宽", direction="loosen_max")
+        apply_adjustment("min_prior_rise_pct", 17.0, "前高前累计涨幅", "中性日保留主升浪容错", direction="loosen_min")
+        apply_adjustment("min_volume_ratio", 0.95, "量比", "中性日轻放宽", direction="loosen_min")
+        apply_adjustment("min_turnover_rate", 1.8, "换手率", "中性日轻放宽", direction="loosen_min")
+        apply_adjustment("min_sector_change_pct", 0.8, "板块涨幅阈值", "中性日轻放宽", direction="loosen_min")
+        apply_adjustment("max_bias_ma5_pct", 9.5, "MA5乖离率", "中性日轻放宽", direction="loosen_max")
         apply_adjustment("abc_min_pullback_pct", 4.0, "ABC-A段回撤阈值", "中性日轻放宽", direction="loosen_min")
         apply_adjustment("abc_min_rebound_pct", 2.0, "ABC-B段反抽阈值", "中性日轻放宽", direction="loosen_min")
         apply_adjustment("abc_min_c_leg_pct", 1.5, "ABC-C段回踩阈值", "中性日轻放宽", direction="loosen_min")
         apply_adjustment("abc_min_c_retention_ratio", 0.86, "ABC-C段保留比例", "中性日轻放宽", direction="loosen_min")
         apply_adjustment("abc_rebreak_buffer_pct", -0.2, "ABC再突破缓冲", "中性日轻放宽", direction="loosen_min")
     elif normalized_regime == "weak":
-        apply_adjustment("min_prior_rise_pct", 18.0, "前高前累计涨幅", "弱势日保留强势股主升浪容错", direction="loosen_min")
-        apply_adjustment("min_volume_ratio", 1.2, "量比", "弱势日优先保留量能", direction="loosen_min")
-        apply_adjustment("min_turnover_rate", 4.0, "换手率", "弱势日优先保留换手", direction="loosen_min")
-        apply_adjustment("min_sector_change_pct", 0.8, "板块涨幅阈值", "弱势日放宽板块强度", direction="loosen_min")
-        apply_adjustment("max_bias_ma5_pct", 9.0, "MA5乖离率", "弱势日允许更大回撤", direction="loosen_max")
-        apply_adjustment("abc_min_pullback_pct", 3.5, "ABC-A段回撤阈值", "弱势日放宽形态确认", direction="loosen_min")
+        apply_adjustment("min_prior_rise_pct", 16.0, "前高前累计涨幅", "弱势日保留强势股主升浪容错", direction="loosen_min")
+        apply_adjustment("min_volume_ratio", 0.9, "量比", "弱势日优先保留量能", direction="loosen_min")
+        apply_adjustment("min_turnover_rate", 1.5, "换手率", "弱势日优先保留换手", direction="loosen_min")
+        apply_adjustment("min_sector_change_pct", 0.5, "板块涨幅阈值", "弱势日放宽板块强度", direction="loosen_min")
+        apply_adjustment("max_bias_ma5_pct", 10.5, "MA5乖离率", "弱势日允许更大回撤", direction="loosen_max")
+        apply_adjustment("abc_min_pullback_pct", 3.0, "ABC-A段回撤阈值", "弱势日放宽形态确认", direction="loosen_min")
         apply_adjustment("abc_min_rebound_pct", 1.5, "ABC-B段反抽阈值", "弱势日放宽形态确认", direction="loosen_min")
         apply_adjustment("abc_min_c_leg_pct", 1.0, "ABC-C段回踩阈值", "弱势日放宽形态确认", direction="loosen_min")
-        apply_adjustment("abc_min_c_retention_ratio", 0.82, "ABC-C段保留比例", "弱势日放宽形态确认", direction="loosen_min")
-        apply_adjustment("abc_rebreak_buffer_pct", -0.4, "ABC再突破缓冲", "弱势日放宽形态确认", direction="loosen_min")
+        apply_adjustment("abc_min_c_retention_ratio", 0.80, "ABC-C段保留比例", "弱势日放宽形态确认", direction="loosen_min")
+        apply_adjustment("abc_rebreak_buffer_pct", -0.5, "ABC再突破缓冲", "弱势日放宽形态确认", direction="loosen_min")
 
     return config, adjustments
 
@@ -1062,7 +1064,7 @@ def build_screening_report(
         f"- 量比 > {_format_rule_threshold(rule_config.min_volume_ratio)}，换手率 > {_format_rule_threshold(rule_config.min_turnover_rate)}%",
         sector_rule_line,
         f"- 5 日线乖离率 < {_format_rule_threshold(rule_config.max_bias_ma5_pct)}%",
-        "- MA5 > MA10 > MA20",
+        "- 10 日线、20 日线保持朝上",
         "",
     ])
 
@@ -1105,7 +1107,7 @@ class AshareRuleScreenerService:
         self.rule_config = rule_config or AshareRuleConfig(
             lookback_days=int(os.getenv("RULE_SCREENER_LOOKBACK_DAYS", "60")),
             abc_window_days=int(os.getenv("RULE_SCREENER_ABC_WINDOW_DAYS", "20")),
-            max_bias_ma5_pct=float(os.getenv("RULE_SCREENER_MAX_BIAS_MA5_PCT", "8")),
+            max_bias_ma5_pct=float(os.getenv("RULE_SCREENER_MAX_BIAS_MA5_PCT", "9")),
             ai_review_limit=int(os.getenv("RULE_SCREENER_AI_REVIEW_LIMIT", "0")),
             sector_rank_top_n=int(os.getenv("RULE_SCREENER_SECTOR_TOP_N", "80")),
             exclude_st=os.getenv("RULE_SCREENER_EXCLUDE_ST", "true").lower() != "false",
@@ -1186,10 +1188,10 @@ class AshareRuleScreenerService:
         return AshareRuleConfig(
             lookback_days=self.rule_config.lookback_days,
             abc_window_days=self.rule_config.abc_window_days + 5,
-            min_prior_rise_pct=max(15.0, self.rule_config.min_prior_rise_pct - 2.0),
-            min_volume_ratio=max(1.2, self.rule_config.min_volume_ratio - 0.2),
-            min_turnover_rate=max(4.0, self.rule_config.min_turnover_rate - 1.0),
-            min_sector_change_pct=max(0.8, self.rule_config.min_sector_change_pct - 1.2),
+            min_prior_rise_pct=max(14.0, self.rule_config.min_prior_rise_pct - 2.0),
+            min_volume_ratio=max(0.9, self.rule_config.min_volume_ratio - 0.1),
+            min_turnover_rate=max(1.5, self.rule_config.min_turnover_rate - 0.5),
+            min_sector_change_pct=max(0.8, self.rule_config.min_sector_change_pct - 0.2),
             max_bias_ma5_pct=self.rule_config.max_bias_ma5_pct + 1.0,
             ai_review_limit=self.rule_config.ai_review_limit,
             sector_rank_top_n=self.rule_config.sector_rank_top_n,
@@ -1197,7 +1199,7 @@ class AshareRuleScreenerService:
             exclude_st=self.rule_config.exclude_st,
             allow_open_data_fallback=self.rule_config.allow_open_data_fallback,
             auto_relax_if_empty=False,
-            abc_min_pullback_pct=max(3.5, self.rule_config.abc_min_pullback_pct - 1.5),
+            abc_min_pullback_pct=max(3.0, self.rule_config.abc_min_pullback_pct - 1.0),
             abc_min_rebound_pct=max(1.5, self.rule_config.abc_min_rebound_pct - 1.5),
             abc_min_c_leg_pct=max(1.0, self.rule_config.abc_min_c_leg_pct - 1.0),
             abc_min_c_retention_ratio=max(0.82, self.rule_config.abc_min_c_retention_ratio - 0.08),

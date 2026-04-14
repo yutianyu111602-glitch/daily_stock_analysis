@@ -100,7 +100,7 @@ class RunRuleScreenerEnvTestCase(unittest.TestCase):
         notes = [
             "严格条件命中优先；严格档为 0 时，才会按市场状态进入动态放宽。",
             "市场环境：弱势日",
-            "动态放宽：板块涨幅阈值：2.0 -> 0.8（弱势日放宽板块强度）",
+            "动态放宽：板块涨幅阈值：1.0 -> 0.8（弱势日放宽板块强度）",
             "技术候选池满足核心技术结构，板块强度仅作参考，不自动并入自选池。",
         ]
 
@@ -109,7 +109,7 @@ class RunRuleScreenerEnvTestCase(unittest.TestCase):
             extracted,
             [
                 "市场环境：弱势日",
-                "动态放宽：板块涨幅阈值：2.0 -> 0.8（弱势日放宽板块强度）",
+                "动态放宽：板块涨幅阈值：1.0 -> 0.8（弱势日放宽板块强度）",
             ],
         )
 
@@ -129,7 +129,7 @@ class RunRuleScreenerEnvTestCase(unittest.TestCase):
             report="# A股规则选股日报 20260414\n\n## 结果\n- 今日未筛出符合条件的A股股票。\n",
             profile_notes=[
                 "市场环境：弱势日",
-                "动态放宽：板块涨幅阈值：2.0 -> 0.8（弱势日放宽板块强度）",
+                "动态放宽：板块涨幅阈值：1.0 -> 0.8（弱势日放宽板块强度）",
             ],
         )
         fake_args = SimpleNamespace(debug=False, no_notify=False, no_ai_review=False)
