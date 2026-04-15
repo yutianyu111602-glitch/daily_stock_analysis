@@ -31,14 +31,18 @@ class DailyAnalysisWorkflowTestCase(unittest.TestCase):
         self.assertNotIn('REPORT_TYPE="brief"', workflow)
         self.assertNotIn('NEWS_STRATEGY_PROFILE="ultra_short"', workflow)
 
-    def test_workflow_uses_three_intraday_sessions_with_midday_profile(self) -> None:
+    def test_workflow_uses_four_scheduled_sessions_without_random_delay(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
 
         self.assertIn("22 2 * * 1-5", workflow)
         self.assertIn("32 3 * * 1-5", workflow)
         self.assertIn("22 6 * * 1-5", workflow)
+        self.assertIn("0 7 * * 1-5", workflow)
+        self.assertNotIn("随机延迟（避免固定时间访问）", workflow)
         self.assertIn("SESSION_PROFILE=\"midday\"", workflow)
+        self.assertIn("SESSION_PROFILE=\"close\"", workflow)
         self.assertIn("midday)", workflow)
+        self.assertIn("close)", workflow)
 
 
 class RuleScreenerWorkflowTestCase(unittest.TestCase):
@@ -76,8 +80,11 @@ class RuleScreenerWorkflowTestCase(unittest.TestCase):
         self.assertIn("RULE_SCREENER_PREFER_AIHUBMIX: ${{ vars.RULE_SCREENER_PREFER_AIHUBMIX || 'true' }}", workflow)
         self.assertIn("RULE_SCREENER_AIHUBMIX_MODEL: ${{ vars.RULE_SCREENER_AIHUBMIX_MODEL || 'gpt-5-chat-latest' }}", workflow)
         self.assertIn("uses: actions/cache@v4", workflow)
+        self.assertIn('cron: "20 2 * * 1-5"', workflow)
+        self.assertIn('cron: "20 6 * * 1-5"', workflow)
+        self.assertIn('if [ "${{ github.event_name }}" = "schedule" ]; then', workflow)
+        self.assertIn('ARGS="$ARGS --no-ai-review"', workflow)
         self.assertIn("python scripts/run_rule_screener.py", workflow)
-        self.assertNotIn("cron:", workflow)
 
 
 class CloseComboWorkflowTestCase(unittest.TestCase):

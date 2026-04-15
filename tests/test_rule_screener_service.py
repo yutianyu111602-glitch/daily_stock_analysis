@@ -445,9 +445,11 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         report = build_screening_report(
             candidates=[],
             report_date="2026-04-13",
+            generated_at=datetime(2026, 4, 15, 10, 30),
         )
 
         self.assertIn("2026-04-13", report)
+        self.assertIn("推送时间 2026-04-15 10:30", report)
         self.assertIn("未筛出符合条件的A股股票", report)
         self.assertIn("5 日线乖离率 < 9%", report)
         self.assertIn("10 日线、20 日线保持朝上", report)

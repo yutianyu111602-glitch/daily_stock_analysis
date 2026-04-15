@@ -62,7 +62,7 @@ class Serverchan3Sender:
 
         # 处理消息标题
         if title is None:
-            date_str = datetime.now().strftime('%Y-%m-%d')
+            date_str = datetime.now().strftime('%Y-%m-%d %H:%M')
             title = f"📈 股票分析报告 - {date_str}"
 
         try:

@@ -1,6 +1,9 @@
 name: A股规则选股
 
 on:
+  schedule:
+    - cron: "20 2 * * 1-5"  # 周一到周五，UTC 02:20 = 北京时间 10:20（目标 10:30 收到规则选股候选池）
+    - cron: "20 6 * * 1-5"  # 周一到周五，UTC 06:20 = 北京时间 14:20（目标 14:30 收到规则选股候选池）
   workflow_dispatch:
     inputs:
       ai_review:
@@ -119,7 +122,10 @@ jobs:
           RULE_SCREENER_DEBUG_REGIME: "${{ vars.RULE_SCREENER_DEBUG_REGIME || 'true' }}"
         run: |
           ARGS=""
-          if [ "${{ github.event.inputs.ai_review || 'true' }}" != "true" ]; then
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "⏰ 定时规则选股默认关闭 AI 复核，优先保证候选池准时推送"
+            ARGS="$ARGS --no-ai-review"
+          elif [ "${{ github.event.inputs.ai_review || 'true' }}" != "true" ]; then
             ARGS="$ARGS --no-ai-review"
           fi
           python scripts/run_rule_screener.py $ARGS

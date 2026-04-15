@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Union
 
@@ -1244,6 +1244,7 @@ def build_screening_report(
     candidates: Sequence[RuleScreeningCandidate],
     report_date: str,
     *,
+    generated_at: Optional[datetime] = None,
     ai_review_lines: Optional[Sequence[str]] = None,
     profile_name: str = "严格版",
     profile_notes: Optional[Sequence[str]] = None,
@@ -1391,8 +1392,10 @@ def build_screening_report(
             f"，且涨幅榜排名前 {rule_config.sector_rank_top_n}"
             "（人工精选池中改为排序参考，不作硬性剔除）"
         )
+    generated_at = generated_at or datetime.now(timezone(timedelta(hours=8)))
+    generated_at_display = generated_at.strftime("%Y-%m-%d %H:%M")
     lines = [
-        f"# A股规则选股日报 {report_date}",
+        f"# A股规则选股日报 {report_date} | 推送时间 {generated_at_display}",
         "",
         "## 筛选档位",
         f"- 本次结果：{profile_name}",

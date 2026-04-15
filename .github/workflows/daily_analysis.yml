@@ -1,11 +1,12 @@
 name: 每日股票分析
 
 on:
-  # 定时触发 - 提前启动，目标接收时间为工作日北京时间 11:00、14:30 与 15:10
+  # 定时触发 - 提前启动，目标接收时间为工作日北京时间 10:30、11:40、14:30 与 15:10
   schedule:
-    - cron: '52 2 * * 1-5'     # 周一到周五，UTC 02:52 = 北京时间 10:52（目标 11:00 收到盘中简报）
+    - cron: '22 2 * * 1-5'     # 周一到周五，UTC 02:22 = 北京时间 10:22（目标 10:30 收到盘中简报）
+    - cron: '32 3 * * 1-5'     # 周一到周五，UTC 03:32 = 北京时间 11:32（目标 11:40 收到上午收盘简报）
     - cron: '22 6 * * 1-5'     # 周一到周五，UTC 06:22 = 北京时间 14:22（目标 14:30 收到盘中简报）
-    - cron: '0 7 * * 1-5'      # 周一到周五，UTC 07:00 = 北京时间 15:00（目标 15:10 收到详细复盘）
+    - cron: '0 7 * * 1-5'      # 周一到周五，UTC 07:00 = 北京时间 15:00（目标 15:10 收到收盘复盘）
   
   # 手动触发
   workflow_dispatch:
@@ -20,13 +21,14 @@ on:
           - market-only   # 仅大盘复盘
           - stocks-only   # 仅股票分析
       session_profile:
-        description: '报告档位（auto=按上午/下午自动切换）'
+        description: '报告档位（auto=按时段自动切换）'
         required: false
         default: 'auto'
         type: choice
         options:
           - auto
           - intraday
+          - midday
           - close
       force_run:
         description: '强制运行（跳过交易日检查）'
@@ -46,9 +48,6 @@ jobs:
     timeout-minutes: ${{ fromJSON(vars.ANALYSIS_TIMEOUT_MINUTES || '30') }}
     
     steps:
-      - name: 随机延迟（避免固定时间访问）
-        run: sleep $((RANDOM % 60))  # 随机延迟0-60秒启动
-      
       - name: 检出代码
         uses: actions/checkout@v5
       
@@ -76,7 +75,7 @@ jobs:
           LITELLM_CONFIG: ${{ vars.LITELLM_CONFIG || secrets.LITELLM_CONFIG }}
           LITELLM_CONFIG_YAML: ${{ vars.LITELLM_CONFIG_YAML || secrets.LITELLM_CONFIG_YAML }}
           LITELLM_API_KEY: ${{ secrets.LITELLM_API_KEY }}
-          LITELLM_MODEL: ${{ vars.LITELLM_MODEL || secrets.LITELLM_MODEL }}
+          LITELLM_MODEL: ${{ vars.LITELLM_MODEL || secrets.LITELLM_MODEL || 'openai/gpt-5-chat-latest' }}
 
           # Gemini AI（主选）
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -90,7 +89,7 @@ jobs:
           # OpenAI 兼容 API（备选）
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL || secrets.OPENAI_BASE_URL }}
-          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || secrets.OPENAI_MODEL }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || secrets.OPENAI_MODEL || 'gpt-5-chat-latest' }}
 
           # DeepSeek
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
@@ -232,8 +231,11 @@ jobs:
 
           if [ "$SESSION_PROFILE" = "auto" ]; then
             case "$EVENT_SCHEDULE" in
-              "52 2 * * 1-5"|"22 6 * * 1-5")
+              "22 2 * * 1-5"|"22 6 * * 1-5")
                 SESSION_PROFILE="intraday"
+                ;;
+              "32 3 * * 1-5")
+                SESSION_PROFILE="midday"
                 ;;
               "0 7 * * 1-5")
                 SESSION_PROFILE="close"
@@ -249,6 +251,12 @@ jobs:
               MODE="stocks-only"
               REPORT_TYPE="full"
               MARKET_REVIEW_ENABLED="false"
+              NEWS_STRATEGY_PROFILE="short"
+              ;;
+            midday)
+              MODE="full"
+              REPORT_TYPE="full"
+              MARKET_REVIEW_ENABLED="true"
               NEWS_STRATEGY_PROFILE="short"
               ;;
             close)
