@@ -1,8 +1,6 @@
 name: A股规则选股
 
 on:
-  schedule:
-    - cron: "35 7 * * 1-5" # 北京时间 15:35，等日线收盘数据稳定后推送
   workflow_dispatch:
     inputs:
       ai_review:
@@ -96,7 +94,10 @@ jobs:
           RULE_SCREENER_AI_REVIEW_LIMIT: ${{ vars.RULE_SCREENER_AI_REVIEW_LIMIT || '12' }}
           RULE_SCREENER_LOOKBACK_DAYS: ${{ vars.RULE_SCREENER_LOOKBACK_DAYS || '60' }}
           RULE_SCREENER_ABC_WINDOW_DAYS: ${{ vars.RULE_SCREENER_ABC_WINDOW_DAYS || '20' }}
+          RULE_SCREENER_MIN_PRIOR_RISE_PCT: ${{ vars.RULE_SCREENER_MIN_PRIOR_RISE_PCT || '20' }}
+          RULE_SCREENER_MIN_VOLUME_RATIO: ${{ vars.RULE_SCREENER_MIN_VOLUME_RATIO || '1' }}
           RULE_SCREENER_MIN_TURNOVER_RATE: ${{ vars.RULE_SCREENER_MIN_TURNOVER_RATE || '3' }}
+          RULE_SCREENER_MIN_SECTOR_CHANGE_PCT: ${{ vars.RULE_SCREENER_MIN_SECTOR_CHANGE_PCT || '1' }}
           RULE_SCREENER_MAX_BIAS_MA5_PCT: ${{ vars.RULE_SCREENER_MAX_BIAS_MA5_PCT || '9' }}
           RULE_SCREENER_SECTOR_TOP_N: ${{ vars.RULE_SCREENER_SECTOR_TOP_N || '5' }}
           RULE_SCREENER_EXCLUDE_ST: ${{ vars.RULE_SCREENER_EXCLUDE_ST || 'true' }}
@@ -112,7 +113,8 @@ jobs:
           RULE_SCREENER_CACHE_DIR: .cache/rule_screener_v2/tushare
           RULE_SCREENER_DYNAMIC_MODE: "${{ vars.RULE_SCREENER_DYNAMIC_MODE || 'true' }}"
           RULE_SCREENER_ALLOW_EMPTY_REPORT: "${{ vars.RULE_SCREENER_ALLOW_EMPTY_REPORT || 'false' }}"
-          RULE_SCREENER_MANUAL_REVIEW_LIMIT: "${{ vars.RULE_SCREENER_MANUAL_REVIEW_LIMIT || '20' }}"
+          RULE_SCREENER_MANUAL_REVIEW_LIMIT: "${{ vars.RULE_SCREENER_MANUAL_REVIEW_LIMIT || '15' }}"
+          RULE_SCREENER_FOCUS_POOL_LIMIT: "${{ vars.RULE_SCREENER_FOCUS_POOL_LIMIT || '10' }}"
           RULE_SCREENER_DEBUG_SECTOR: "${{ vars.RULE_SCREENER_DEBUG_SECTOR || 'true' }}"
           RULE_SCREENER_DEBUG_REGIME: "${{ vars.RULE_SCREENER_DEBUG_REGIME || 'true' }}"
         run: |

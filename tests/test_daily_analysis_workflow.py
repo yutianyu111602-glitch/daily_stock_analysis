@@ -8,6 +8,12 @@ import unittest
 WORKFLOW_PATH = (
     Path(__file__).resolve().parents[1] / ".github" / "workflows" / "daily_analysis.yml"
 )
+RULE_SCREENER_WORKFLOW_PATH = (
+    Path(__file__).resolve().parents[1] / ".github" / "workflows" / "rule_screener.yml"
+)
+CLOSE_COMBO_WORKFLOW_PATH = (
+    Path(__file__).resolve().parents[1] / ".github" / "workflows" / "close_combo_push.yml"
+)
 
 
 class DailyAnalysisWorkflowTestCase(unittest.TestCase):
@@ -25,16 +31,19 @@ class DailyAnalysisWorkflowTestCase(unittest.TestCase):
         self.assertNotIn('REPORT_TYPE="brief"', workflow)
         self.assertNotIn('NEWS_STRATEGY_PROFILE="ultra_short"', workflow)
 
+    def test_workflow_uses_three_intraday_sessions_with_midday_profile(self) -> None:
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("22 2 * * 1-5", workflow)
+        self.assertIn("32 3 * * 1-5", workflow)
+        self.assertIn("22 6 * * 1-5", workflow)
+        self.assertIn("SESSION_PROFILE=\"midday\"", workflow)
+        self.assertIn("midday)", workflow)
+
 
 class RuleScreenerWorkflowTestCase(unittest.TestCase):
     def test_rule_screener_workflow_exists_and_maps_required_env(self) -> None:
-        workflow_path = (
-            Path(__file__).resolve().parents[1]
-            / ".github"
-            / "workflows"
-            / "rule_screener.yml"
-        )
-        workflow = workflow_path.read_text(encoding="utf-8")
+        workflow = RULE_SCREENER_WORKFLOW_PATH.read_text(encoding="utf-8")
 
         self.assertIn("TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}", workflow)
         self.assertIn("AIHUBMIX_KEY: ${{ secrets.AIHUBMIX_KEY }}", workflow)
@@ -43,11 +52,15 @@ class RuleScreenerWorkflowTestCase(unittest.TestCase):
         self.assertIn("RULE_SCREENER_ALLOW_FALLBACK: ${{ vars.RULE_SCREENER_ALLOW_FALLBACK || 'false' }}", workflow)
         self.assertIn('RULE_SCREENER_DYNAMIC_MODE: "${{ vars.RULE_SCREENER_DYNAMIC_MODE || \'true\' }}"', workflow)
         self.assertIn('RULE_SCREENER_ALLOW_EMPTY_REPORT: "${{ vars.RULE_SCREENER_ALLOW_EMPTY_REPORT || \'false\' }}"', workflow)
-        self.assertIn('RULE_SCREENER_MANUAL_REVIEW_LIMIT: "${{ vars.RULE_SCREENER_MANUAL_REVIEW_LIMIT || \'20\' }}"', workflow)
+        self.assertIn('RULE_SCREENER_MANUAL_REVIEW_LIMIT: "${{ vars.RULE_SCREENER_MANUAL_REVIEW_LIMIT || \'15\' }}"', workflow)
+        self.assertIn('RULE_SCREENER_FOCUS_POOL_LIMIT: "${{ vars.RULE_SCREENER_FOCUS_POOL_LIMIT || \'10\' }}"', workflow)
         self.assertIn('RULE_SCREENER_DEBUG_SECTOR: "${{ vars.RULE_SCREENER_DEBUG_SECTOR || \'true\' }}"', workflow)
         self.assertIn('RULE_SCREENER_DEBUG_REGIME: "${{ vars.RULE_SCREENER_DEBUG_REGIME || \'true\' }}"', workflow)
         self.assertIn("RULE_SCREENER_AUTO_RELAX_IF_EMPTY: ${{ vars.RULE_SCREENER_AUTO_RELAX_IF_EMPTY || 'true' }}", workflow)
+        self.assertIn("RULE_SCREENER_MIN_PRIOR_RISE_PCT: ${{ vars.RULE_SCREENER_MIN_PRIOR_RISE_PCT || '20' }}", workflow)
+        self.assertIn("RULE_SCREENER_MIN_VOLUME_RATIO: ${{ vars.RULE_SCREENER_MIN_VOLUME_RATIO || '1' }}", workflow)
         self.assertIn("RULE_SCREENER_MIN_TURNOVER_RATE: ${{ vars.RULE_SCREENER_MIN_TURNOVER_RATE || '3' }}", workflow)
+        self.assertIn("RULE_SCREENER_MIN_SECTOR_CHANGE_PCT: ${{ vars.RULE_SCREENER_MIN_SECTOR_CHANGE_PCT || '1' }}", workflow)
         self.assertIn("RULE_SCREENER_MAX_BIAS_MA5_PCT: ${{ vars.RULE_SCREENER_MAX_BIAS_MA5_PCT || '9' }}", workflow)
         self.assertIn("RULE_SCREENER_SECTOR_TOP_N: ${{ vars.RULE_SCREENER_SECTOR_TOP_N || '5' }}", workflow)
         self.assertIn("RULE_SCREENER_AUTO_APPEND_TO_STOCK_LIST: ${{ vars.RULE_SCREENER_AUTO_APPEND_TO_STOCK_LIST || 'true' }}", workflow)
@@ -64,6 +77,18 @@ class RuleScreenerWorkflowTestCase(unittest.TestCase):
         self.assertIn("RULE_SCREENER_AIHUBMIX_MODEL: ${{ vars.RULE_SCREENER_AIHUBMIX_MODEL || 'gpt-5-chat-latest' }}", workflow)
         self.assertIn("uses: actions/cache@v4", workflow)
         self.assertIn("python scripts/run_rule_screener.py", workflow)
+        self.assertNotIn("cron:", workflow)
+
+
+class CloseComboWorkflowTestCase(unittest.TestCase):
+    def test_close_combo_workflow_exists_and_runs_combined_push_script(self) -> None:
+        workflow = CLOSE_COMBO_WORKFLOW_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("15:15", workflow)
+        self.assertIn("15 7 * * 1-5", workflow)
+        self.assertIn("python scripts/run_close_combo_push.py", workflow)
+        self.assertIn("SERVERCHAN3_SENDKEY: ${{ secrets.SERVERCHAN3_SENDKEY }}", workflow)
+        self.assertIn("TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}", workflow)
 
 
 if __name__ == "__main__":

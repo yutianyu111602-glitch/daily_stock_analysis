@@ -443,10 +443,29 @@ class TestServerchan3Sender(unittest.TestCase):
     @mock.patch("src.notification_sender.serverchan3_sender.requests.post")
     def test_send_success_returns_true(self, mock_post):
         mock_post.return_value = _response(200, {"code": 0})
-        cfg = _config(serverchan3_sendkey="SCT123")
+        cfg = _config(serverchan3_sendkey="sctp19663tTESTKEY")
         sender = Serverchan3Sender(cfg)
         result = sender.send_to_serverchan3("hello")
         self.assertTrue(result)
+        call = mock_post.call_args
+        self.assertEqual(call.args[0], "https://sctp19663tTESTKEY.push.ft07.com/send")
+        self.assertEqual(call.kwargs["json"]["short"], "hello")
+
+    @mock.patch("src.notification_sender.serverchan3_sender.time.sleep")
+    @mock.patch("src.notification_sender.serverchan3_sender.requests.post")
+    def test_send_chunked_when_content_exceeds_max_bytes(self, mock_post, _mock_sleep):
+        mock_post.return_value = _response(200, {"code": 0})
+        cfg = _config(serverchan3_sendkey="SCT123")
+        cfg.serverchan3_max_bytes = 120
+        sender = Serverchan3Sender(cfg)
+
+        content = "\n".join(f"第{i}行 " + ("数据" * 40) for i in range(1, 6))
+        result = sender.send_to_serverchan3(content, title="测试报告")
+
+        self.assertTrue(result)
+        self.assertGreaterEqual(mock_post.call_count, 2)
+        titles = [call.kwargs["json"]["title"] for call in mock_post.call_args_list]
+        self.assertTrue(any("(1/" in title for title in titles))
 
 
 class TestSlackSender(unittest.TestCase):

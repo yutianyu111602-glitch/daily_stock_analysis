@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 class AshareRuleConfig:
     lookback_days: int = 60
     abc_window_days: int = 20
-    min_prior_rise_pct: float = 18.0
+    min_prior_rise_pct: float = 20.0
     min_volume_ratio: float = 1.0
     min_turnover_rate: float = 3.0
     min_sector_change_pct: float = 1.0
@@ -55,6 +55,7 @@ class RuleScreeningCandidate:
     code: str
     name: str
     close: float
+    change_pct: float
     ma5: float
     ma10: float
     ma20: float
@@ -70,6 +71,10 @@ class RuleScreeningCandidate:
     abc_b_high_price: float = 0.0
     abc_c_low_price: float = 0.0
     abc_b_high_ma20: float = 0.0
+    capital_flow_known: bool = False
+    super_large_net_inflow: float = 0.0
+    large_net_inflow: float = 0.0
+    medium_net_inflow: float = 0.0
     father_priority_score: float = 0.0
     matched_condition_count: int = 0
     total_condition_count: int = 0
@@ -139,6 +144,14 @@ class TurnoverSnapshot:
 
 
 @dataclass
+class CapitalFlowSnapshot:
+    flow_by_code: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    source: str = "moneyflow"
+    is_partial: bool = False
+    notes: List[str] = field(default_factory=list)
+
+
+@dataclass
 class SectorSnapshotLoadResult:
     snapshot: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
     source: str = "tushare"
@@ -180,6 +193,27 @@ def _coerce_turnover_snapshot(
             continue
         turnover_by_code[normalize_stock_code(code)] = float(value)
     return TurnoverSnapshot(turnover_by_code=turnover_by_code)
+
+
+def _coerce_capital_flow_snapshot(
+    capital_flow_snapshot: Optional[Union[Dict[str, Dict[str, float]], CapitalFlowSnapshot]],
+) -> CapitalFlowSnapshot:
+    if isinstance(capital_flow_snapshot, CapitalFlowSnapshot):
+        return capital_flow_snapshot
+    if not capital_flow_snapshot:
+        return CapitalFlowSnapshot(source="unknown", is_partial=True)
+
+    normalized: Dict[str, Dict[str, float]] = {}
+    for code, payload in capital_flow_snapshot.items():
+        if not isinstance(payload, dict):
+            continue
+        normalized_code = normalize_stock_code(code)
+        normalized[normalized_code] = {
+            "super_large_net_inflow": float(payload.get("super_large_net_inflow") or 0.0),
+            "large_net_inflow": float(payload.get("large_net_inflow") or 0.0),
+            "medium_net_inflow": float(payload.get("medium_net_inflow") or 0.0),
+        }
+    return CapitalFlowSnapshot(flow_by_code=normalized)
 
 
 def _coerce_sector_snapshot_result(
@@ -234,6 +268,7 @@ def _prepare_indicator_frame(daily_history: pd.DataFrame) -> pd.DataFrame:
     df["avg_volume_5"] = grouped["volume"].transform(lambda s: s.rolling(5, min_periods=5).mean().shift(1))
     df["volume_ratio"] = (df["volume"] / df["avg_volume_5"]).replace([pd.NA, pd.NaT], None)
     df["bias_ma5_pct"] = ((df["close"] - df["ma5"]) / df["ma5"] * 100.0).abs()
+    df["pct_chg"] = grouped["close"].transform(lambda s: s.pct_change() * 100.0).fillna(0.0)
     return df
 
 
@@ -425,25 +460,24 @@ def _build_candidate(
     group: pd.DataFrame,
     latest_turnover: Union[Dict[str, float], TurnoverSnapshot],
     sector_snapshot: Dict[str, List[Dict[str, Any]]],
+    capital_flow_snapshot: Optional[Union[Dict[str, Dict[str, float]], CapitalFlowSnapshot]],
     config: AshareRuleConfig,
     *,
-    require_sector_strength: bool = True,
+    optional_checks: Optional[Sequence[str]] = None,
 ) -> Optional[RuleScreeningCandidate]:
     evaluation = _evaluate_candidate_conditions(
         group=group,
         latest_turnover=latest_turnover,
         sector_snapshot=sector_snapshot,
+        capital_flow_snapshot=capital_flow_snapshot,
         config=config,
     )
     if evaluation is None:
         return None
 
     checks = dict(evaluation["checks"])
-    required_keys = (
-        list(checks.keys())
-        if require_sector_strength
-        else [key for key in checks.keys() if key not in {"sector_ok", "sector_rank_ok"}]
-    )
+    ignored_checks = set(optional_checks or [])
+    required_keys = [key for key in checks.keys() if key not in ignored_checks]
     if not all(checks[key] for key in required_keys):
         return None
 
@@ -451,6 +485,7 @@ def _build_candidate(
         f"前高前累计涨幅 {evaluation['prior_rise_pct']:.1f}%",
         "ABC 调整后重新转强",
         f"收盘站上 MA20，现价 {evaluation['close']:.2f} / MA20 {evaluation['ma20']:.2f}",
+        f"当日涨幅 {evaluation['change_pct']:+.2f}%",
         f"量比 {evaluation['volume_ratio']:.2f}，换手率 {evaluation['turnover_rate']:.2f}%",
         f"{evaluation['sector_name'] or '板块数据暂缺'} 涨幅 {evaluation['sector_change_pct']:.2f}%（涨幅榜第 {evaluation['sector_rank'] or '-'} 名）",
         f"MA5 乖离率 {evaluation['bias_ma5_pct']:.2f}% ，10日线/20日线保持朝上",
@@ -461,6 +496,17 @@ def _build_candidate(
         ),
         "C浪低点高于A浪低点；B浪反弹高于20日线",
     ]
+    if evaluation["capital_flow_known"]:
+        notes.append(
+            "资金流向："
+            f"超大单 {evaluation['super_large_net_inflow']:+.2f}，"
+            f"大单 {evaluation['large_net_inflow']:+.2f}，"
+            f"中单 {evaluation['medium_net_inflow']:+.2f}"
+        )
+        if not checks["capital_flow_ok"]:
+            notes.append("资金流向未完全满足：超大单/大单/中单净流入未同时为正")
+    else:
+        notes.append("资金流向数据暂缺，规则11本次仅作参考")
     if not evaluation["turnover_known"]:
         notes.append("换手率数据缺失，仅供人工判断")
     if not sector_snapshot.get(evaluation["code"]):
@@ -472,6 +518,7 @@ def _build_candidate(
         code=evaluation["code"],
         name=evaluation["name"],
         close=round(evaluation["close"], 2),
+        change_pct=round(evaluation["change_pct"], 2),
         ma5=round(evaluation["ma5"], 2),
         ma10=round(evaluation["ma10"], 2),
         ma20=round(evaluation["ma20"], 2),
@@ -487,6 +534,10 @@ def _build_candidate(
         abc_b_high_price=round(evaluation["abc_b_high_price"], 2),
         abc_c_low_price=round(evaluation["abc_c_low_price"], 2),
         abc_b_high_ma20=round(evaluation["abc_b_high_ma20"], 2),
+        capital_flow_known=bool(evaluation["capital_flow_known"]),
+        super_large_net_inflow=round(evaluation["super_large_net_inflow"], 2),
+        large_net_inflow=round(evaluation["large_net_inflow"], 2),
+        medium_net_inflow=round(evaluation["medium_net_inflow"], 2),
         matched_condition_count=evaluation["matched_condition_count"],
         total_condition_count=evaluation["total_condition_count"],
         failed_conditions=list(evaluation["failed_conditions"]),
@@ -696,6 +747,7 @@ def _condition_label_map(config: AshareRuleConfig) -> Dict[str, str]:
         "abc_b_high_ma20_ok": "B浪反弹未站上20日线",
         "sector_ok": f"所属板块涨幅未达到 {_format_rule_threshold(config.min_sector_change_pct)}%",
         "sector_rank_ok": f"所属板块未进入涨幅榜前 {config.sector_rank_top_n}",
+        "capital_flow_ok": "超大单/大单/中单净流入未同时为正",
     }
 
 
@@ -703,6 +755,7 @@ def _evaluate_candidate_conditions(
     group: pd.DataFrame,
     latest_turnover: Union[Dict[str, float], TurnoverSnapshot],
     sector_snapshot: Dict[str, List[Dict[str, Any]]],
+    capital_flow_snapshot: Optional[Union[Dict[str, Dict[str, float]], CapitalFlowSnapshot]],
     config: AshareRuleConfig,
 ) -> Optional[Dict[str, Any]]:
     group = group.sort_values("trade_date").reset_index(drop=True)
@@ -722,9 +775,16 @@ def _evaluate_candidate_conditions(
     prev_ma20 = float(group.iloc[-2]["ma20"]) if len(group) >= 2 and pd.notna(group.iloc[-2].get("ma20")) else ma20
     bias_ma5_pct = float(latest["bias_ma5_pct"])
     volume_ratio = float(latest["volume_ratio"])
+    change_pct = float(latest.get("pct_chg") or 0.0)
     turnover_snapshot = _coerce_turnover_snapshot(latest_turnover)
     turnover_known = code in turnover_snapshot.turnover_by_code
     turnover_rate = float(turnover_snapshot.turnover_by_code.get(code) or 0.0)
+    capital_flow = _coerce_capital_flow_snapshot(capital_flow_snapshot)
+    flow_payload = capital_flow.flow_by_code.get(code, {})
+    capital_flow_known = bool(flow_payload)
+    super_large_net_inflow = float(flow_payload.get("super_large_net_inflow") or 0.0)
+    large_net_inflow = float(flow_payload.get("large_net_inflow") or 0.0)
+    medium_net_inflow = float(flow_payload.get("medium_net_inflow") or 0.0)
     sector_name, sector_change_pct, sector_rank = _pick_best_sector(sector_snapshot=sector_snapshot, code=code)
     abc_match = _detect_abc_pattern(
         group["close"].tolist(),
@@ -750,12 +810,18 @@ def _evaluate_candidate_conditions(
         "abc_ok": abc_match.confirmed,
         "abc_c_low_ok": abc_match.c_low_higher_than_a_low,
         "abc_b_high_ma20_ok": abc_match.b_high_above_ma20,
+        "capital_flow_ok": (
+            super_large_net_inflow > 0 and large_net_inflow > 0 and medium_net_inflow > 0
+            if capital_flow_known
+            else False
+        ),
     }
 
     return {
         "code": code,
         "name": str(latest.get("name") or code),
         "close": close,
+        "change_pct": change_pct,
         "ma5": ma5,
         "ma10": ma10,
         "ma20": ma20,
@@ -763,6 +829,10 @@ def _evaluate_candidate_conditions(
         "volume_ratio": volume_ratio,
         "turnover_known": turnover_known,
         "turnover_rate": turnover_rate,
+        "capital_flow_known": capital_flow_known,
+        "super_large_net_inflow": super_large_net_inflow,
+        "large_net_inflow": large_net_inflow,
+        "medium_net_inflow": medium_net_inflow,
         "sector_name": sector_name,
         "sector_change_pct": sector_change_pct,
         "sector_rank": sector_rank,
@@ -858,6 +928,9 @@ def _rank_candidates_for_father(
     def score_prior_rise(prior_rise_pct: float) -> float:
         return clamp(12.0 - abs(prior_rise_pct - 30.0) * 0.35, maximum=12.0)
 
+    def score_change_pct(change_pct: float) -> float:
+        return clamp(10.0 - abs(change_pct - 4.0) * 1.8, maximum=10.0)
+
     def score_ma20_proximity(close: float, ma20: float) -> float:
         if ma20 <= 0:
             return 0.0
@@ -882,6 +955,21 @@ def _rank_candidates_for_father(
             score += clamp(b_breakout_pct * 1.2, maximum=8.0)
         return score
 
+    def score_capital_flow(candidate: RuleScreeningCandidate) -> float:
+        if not candidate.capital_flow_known:
+            return 0.0
+        positives = sum(
+            1
+            for value in (
+                candidate.super_large_net_inflow,
+                candidate.large_net_inflow,
+                candidate.medium_net_inflow,
+            )
+            if value > 0
+        )
+        raw_strength = max(candidate.super_large_net_inflow, 0.0) + max(candidate.large_net_inflow, 0.0) + max(candidate.medium_net_inflow, 0.0)
+        return clamp(positives * 3.0 + raw_strength * 0.15, maximum=12.0)
+
     ranked: List[RuleScreeningCandidate] = []
     for candidate in candidates:
         total_score = (
@@ -889,9 +977,11 @@ def _rank_candidates_for_father(
             + score_sector_strength(candidate.sector_change_pct)
             + score_turnover(candidate.turnover_rate)
             + score_volume_ratio(candidate.volume_ratio)
+            + score_change_pct(candidate.change_pct)
             + score_ma20_proximity(candidate.close, candidate.ma20)
             + score_prior_rise(candidate.prior_rise_pct)
             + score_abc_structure(candidate)
+            + score_capital_flow(candidate)
         )
         candidate.father_priority_score = round(total_score, 2)
         ranked.append(candidate)
@@ -902,6 +992,7 @@ def _rank_candidates_for_father(
             item.father_priority_score,
             -(item.sector_rank or 10_000),
             item.sector_change_pct,
+            -abs(item.change_pct - 4.0),
             -abs(item.turnover_rate - 5.5),
             -abs(item.volume_ratio - 1.6),
             -abs(item.prior_rise_pct - 30.0),
@@ -946,20 +1037,14 @@ def _build_dynamic_rule_config(
 
     normalized_regime = (market_regime or "").strip().lower()
     if normalized_regime == "strong":
-        apply_adjustment(
-            "min_sector_change_pct",
-            1.5,
-            "板块涨幅阈值",
-            "强势日仅小幅保守放宽",
-            direction="loosen_min",
-        )
+        apply_adjustment("min_prior_rise_pct", 19.0, "前高前累计涨幅", "强势日保留20%主升浪口径，仅轻微放宽", direction="loosen_min")
     elif normalized_regime == "neutral":
-        apply_adjustment("min_prior_rise_pct", 17.0, "前高前累计涨幅", "中性日保留主升浪容错", direction="loosen_min")
+        apply_adjustment("min_prior_rise_pct", 18.5, "前高前累计涨幅", "中性日保留主升浪容错", direction="loosen_min")
         apply_adjustment("min_volume_ratio", 0.95, "量比", "中性日轻放宽", direction="loosen_min")
         apply_adjustment("min_turnover_rate", 2.5, "换手率", "中性日轻放宽", direction="loosen_min")
         apply_adjustment("max_bias_ma5_pct", 9.5, "MA5乖离率", "中性日轻放宽", direction="loosen_max")
     elif normalized_regime == "weak":
-        apply_adjustment("min_prior_rise_pct", 16.0, "前高前累计涨幅", "弱势日保留强势股主升浪容错", direction="loosen_min")
+        apply_adjustment("min_prior_rise_pct", 18.0, "前高前累计涨幅", "弱势日保留强势股主升浪容错", direction="loosen_min")
         apply_adjustment("min_volume_ratio", 0.9, "量比", "弱势日优先保留量能", direction="loosen_min")
         apply_adjustment("min_turnover_rate", 2.0, "换手率", "弱势日优先保留换手", direction="loosen_min")
         apply_adjustment("max_bias_ma5_pct", 10.5, "MA5乖离率", "弱势日允许更大回撤", direction="loosen_max")
@@ -980,12 +1065,18 @@ def apply_selection_rules(
     daily_history: pd.DataFrame,
     latest_turnover: Union[Dict[str, float], TurnoverSnapshot],
     sector_snapshot: Dict[str, List[Dict[str, Any]]],
+    capital_flow_snapshot: Optional[Union[Dict[str, Dict[str, float]], CapitalFlowSnapshot]] = None,
     config: Optional[AshareRuleConfig] = None,
+    *,
+    optional_checks: Optional[Sequence[str]] = None,
 ) -> List[RuleScreeningCandidate]:
     config = config or AshareRuleConfig()
     prepared = _prepare_indicator_frame(daily_history)
     if prepared.empty:
         return []
+    active_optional_checks = list(optional_checks or [])
+    if not _coerce_capital_flow_snapshot(capital_flow_snapshot).flow_by_code and "capital_flow_ok" not in active_optional_checks:
+        active_optional_checks.append("capital_flow_ok")
 
     candidates: List[RuleScreeningCandidate] = []
     for code, group in prepared.groupby("code"):
@@ -993,7 +1084,9 @@ def apply_selection_rules(
             group=group,
             latest_turnover=latest_turnover,
             sector_snapshot=sector_snapshot,
+            capital_flow_snapshot=capital_flow_snapshot,
             config=config,
+            optional_checks=active_optional_checks,
         )
         if candidate is not None:
             candidates.append(candidate)
@@ -1014,6 +1107,7 @@ def build_technical_candidate_pool(
     daily_history: pd.DataFrame,
     latest_turnover: Union[Dict[str, float], TurnoverSnapshot],
     sector_snapshot: Dict[str, List[Dict[str, Any]]],
+    capital_flow_snapshot: Optional[Union[Dict[str, Dict[str, float]], CapitalFlowSnapshot]] = None,
     config: Optional[AshareRuleConfig] = None,
 ) -> List[RuleScreeningCandidate]:
     config = config or AshareRuleConfig()
@@ -1027,8 +1121,9 @@ def build_technical_candidate_pool(
             group=group,
             latest_turnover=latest_turnover,
             sector_snapshot=sector_snapshot,
+            capital_flow_snapshot=capital_flow_snapshot,
             config=config,
-            require_sector_strength=False,
+            optional_checks=("sector_ok", "sector_rank_ok", "capital_flow_ok"),
         )
         if candidate is not None:
             candidates.append(candidate)
@@ -1040,9 +1135,10 @@ def build_manual_review_pool(
     daily_history: pd.DataFrame,
     latest_turnover: Union[Dict[str, float], TurnoverSnapshot],
     sector_snapshot: Dict[str, List[Dict[str, Any]]],
+    capital_flow_snapshot: Optional[Union[Dict[str, Dict[str, float]], CapitalFlowSnapshot]] = None,
     config: Optional[AshareRuleConfig] = None,
     *,
-    limit: int = 20,
+    limit: int = 15,
 ) -> List[RuleScreeningCandidate]:
     config = config or AshareRuleConfig()
     prepared = _prepare_indicator_frame(daily_history)
@@ -1055,6 +1151,7 @@ def build_manual_review_pool(
             group=group,
             latest_turnover=latest_turnover,
             sector_snapshot=sector_snapshot,
+            capital_flow_snapshot=capital_flow_snapshot,
             config=config,
         )
         if evaluation is None:
@@ -1067,6 +1164,7 @@ def build_manual_review_pool(
 
         notes = [
             f"前高前累计涨幅 {evaluation['prior_rise_pct']:.1f}%",
+            f"当日涨幅 {evaluation['change_pct']:+.2f}%",
             f"收盘/MA20：{evaluation['close']:.2f} / {evaluation['ma20']:.2f}",
             f"量比/换手率：{evaluation['volume_ratio']:.2f} / {evaluation['turnover_rate']:.2f}%",
             (
@@ -1080,6 +1178,15 @@ def build_manual_review_pool(
             ),
             f"命中条件 {evaluation['matched_condition_count']}/{evaluation['total_condition_count']} 项",
         ]
+        if evaluation["capital_flow_known"]:
+            notes.append(
+                "资金流向："
+                f"超大单 {evaluation['super_large_net_inflow']:+.2f}，"
+                f"大单 {evaluation['large_net_inflow']:+.2f}，"
+                f"中单 {evaluation['medium_net_inflow']:+.2f}"
+            )
+        else:
+            notes.append("资金流向数据暂缺，规则11本次仅作参考")
         if evaluation["failed_conditions"]:
             notes.append(f"未满足条件：{'；'.join(evaluation['failed_conditions'])}")
         if not evaluation["turnover_known"]:
@@ -1092,6 +1199,7 @@ def build_manual_review_pool(
                 code=evaluation["code"],
                 name=evaluation["name"],
                 close=round(evaluation["close"], 2),
+                change_pct=round(evaluation["change_pct"], 2),
                 ma5=round(evaluation["ma5"], 2),
                 ma10=round(evaluation["ma10"], 2),
                 ma20=round(evaluation["ma20"], 2),
@@ -1107,6 +1215,10 @@ def build_manual_review_pool(
                 abc_b_high_price=round(evaluation["abc_b_high_price"], 2),
                 abc_c_low_price=round(evaluation["abc_c_low_price"], 2),
                 abc_b_high_ma20=round(evaluation["abc_b_high_ma20"], 2),
+                capital_flow_known=bool(evaluation["capital_flow_known"]),
+                super_large_net_inflow=round(evaluation["super_large_net_inflow"], 2),
+                large_net_inflow=round(evaluation["large_net_inflow"], 2),
+                medium_net_inflow=round(evaluation["medium_net_inflow"], 2),
                 matched_condition_count=evaluation["matched_condition_count"],
                 total_condition_count=evaluation["total_condition_count"],
                 failed_conditions=list(evaluation["failed_conditions"]),
@@ -1184,9 +1296,16 @@ def build_screening_report(
                     f"（{candidate.sector_change_pct:+.2f}%，第 {candidate.sector_rank or '-'} 名）"
                 ),
                 f"   - 现价/MA5/MA10/MA20：{candidate.close:.2f} / {candidate.ma5:.2f} / {candidate.ma10:.2f} / {candidate.ma20:.2f}",
-                f"   - 量比/换手率：{candidate.volume_ratio:.2f} / {candidate.turnover_rate:.2f}%",
+                f"   - 当日涨幅/量比/换手率：{candidate.change_pct:+.2f}% / {candidate.volume_ratio:.2f} / {candidate.turnover_rate:.2f}%",
                 f"   - 前高前累计涨幅：{candidate.prior_rise_pct:.2f}%",
             ]
+            if candidate.capital_flow_known:
+                candidate_lines.append(
+                    "   - 资金流向："
+                    f"超大单 {candidate.super_large_net_inflow:+.2f} / "
+                    f"大单 {candidate.large_net_inflow:+.2f} / "
+                    f"中单 {candidate.medium_net_inflow:+.2f}"
+                )
             if candidate.total_condition_count:
                 candidate_lines.append(
                     f"   - 条件命中：{candidate.matched_condition_count}/{candidate.total_condition_count}"
@@ -1198,13 +1317,17 @@ def build_screening_report(
         lines.append("")
 
     def append_focus_section(section_candidates: Sequence[RuleScreeningCandidate]) -> None:
-        focus_candidates = _rank_candidates_for_father(list(section_candidates))[:10]
-        if len(focus_candidates) < 10:
+        focus_limit = max(1, min(int(os.getenv("RULE_SCREENER_FOCUS_POOL_LIMIT", "10")), 15))
+        focus_candidates = _rank_candidates_for_father(list(section_candidates))[:focus_limit]
+        if not focus_candidates:
             return
+        displayed_focus_count = len(focus_candidates)
 
         lines.extend(
             [
-                "## 优先关注（前 10 只）",
+                f"## 优先关注（前 {displayed_focus_count} 只）",
+                "",
+                "排序依据：行业涨幅排名、行业涨幅、当日涨幅、量比、换手率、ABC 结构质量、资金流向。",
                 "",
             ]
         )
@@ -1221,6 +1344,7 @@ def build_screening_report(
                     ),
                     (
                         f"   - 价量位置：现价 {candidate.close:.2f}，高于MA20 {ma20_premium_pct:.2f}%"
+                        f"，当日涨幅 {candidate.change_pct:+.2f}%"
                         f"，量比 {candidate.volume_ratio:.2f}，换手率 {candidate.turnover_rate:.2f}%"
                     ),
                     (
@@ -1230,6 +1354,13 @@ def build_screening_report(
                     ),
                 ]
             )
+            if candidate.capital_flow_known:
+                lines.append(
+                    "   - 资金流向："
+                    f"超大单 {candidate.super_large_net_inflow:+.2f}，"
+                    f"大单 {candidate.large_net_inflow:+.2f}，"
+                    f"中单 {candidate.medium_net_inflow:+.2f}"
+                )
         lines.append("")
 
     rule_config = rule_config or AshareRuleConfig()
@@ -1293,6 +1424,7 @@ def build_screening_report(
         "- 10 日线、20 日线保持朝上",
         "- C浪低点高于A浪低点",
         "- B浪反弹高于20日线",
+        "- 超大单、大单、中单净流入为正",
         "",
     ])
 
@@ -1336,9 +1468,12 @@ class AshareRuleScreenerService:
         self.rule_config = rule_config or AshareRuleConfig(
             lookback_days=int(os.getenv("RULE_SCREENER_LOOKBACK_DAYS", "60")),
             abc_window_days=int(os.getenv("RULE_SCREENER_ABC_WINDOW_DAYS", "20")),
+            min_prior_rise_pct=float(os.getenv("RULE_SCREENER_MIN_PRIOR_RISE_PCT", "20")),
+            min_volume_ratio=float(os.getenv("RULE_SCREENER_MIN_VOLUME_RATIO", "1")),
             max_bias_ma5_pct=float(os.getenv("RULE_SCREENER_MAX_BIAS_MA5_PCT", "9")),
             ai_review_limit=int(os.getenv("RULE_SCREENER_AI_REVIEW_LIMIT", "12")),
             min_turnover_rate=float(os.getenv("RULE_SCREENER_MIN_TURNOVER_RATE", "3")),
+            min_sector_change_pct=float(os.getenv("RULE_SCREENER_MIN_SECTOR_CHANGE_PCT", "1")),
             sector_rank_top_n=int(os.getenv("RULE_SCREENER_SECTOR_TOP_N", "5")),
             exclude_st=os.getenv("RULE_SCREENER_EXCLUDE_ST", "true").lower() != "false",
             allow_open_data_fallback=os.getenv("RULE_SCREENER_ALLOW_FALLBACK", "false").lower() == "true",
@@ -1360,7 +1495,12 @@ class AshareRuleScreenerService:
 
     def _cache_file(self, api_name: str, cache_key: str) -> Path:
         safe_key = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in str(cache_key))
-        api_dir = self.cache_dir / api_name
+        cache_root = getattr(self, "cache_dir", Path(os.getenv("RULE_SCREENER_CACHE_DIR", ".cache/rule_screener_v2/tushare")))
+        if not isinstance(cache_root, Path):
+            cache_root = Path(str(cache_root))
+        cache_root.mkdir(parents=True, exist_ok=True)
+        self.cache_dir = cache_root
+        api_dir = cache_root / api_name
         api_dir.mkdir(parents=True, exist_ok=True)
         return api_dir / f"{safe_key}.pkl"
 
@@ -1393,13 +1533,16 @@ class AshareRuleScreenerService:
             if isinstance(cached_df, pd.DataFrame) and not cached_df.empty:
                 return cached_df
             logger.warning("检测到 %s 的空缓存 %s，已忽略并重新拉取。", api_name, cache_file)
+        fetcher = getattr(self, "tushare_fetcher", None)
+        if fetcher is None or not hasattr(fetcher, "_call_api_with_rate_limit"):
+            return pd.DataFrame()
 
         frames: List[pd.DataFrame] = []
         offset = 0
         while True:
             page_kwargs = dict(kwargs)
             page_kwargs.update({"offset": offset, "limit": page_size})
-            df = self.tushare_fetcher._call_api_with_rate_limit(api_name, **page_kwargs)
+            df = fetcher._call_api_with_rate_limit(api_name, **page_kwargs)
             if df is None or df.empty:
                 break
             frames.append(df)
@@ -1591,6 +1734,80 @@ class AshareRuleScreenerService:
             source="unknown",
             is_partial=True,
             notes=[f"daily_basic({trade_date}) 及上一交易日均为空，换手率以 unknown 处理，仅供人工判断。"],
+        )
+
+    def _load_capital_flow_snapshot(
+        self,
+        trade_date: str,
+        candidate_codes: Sequence[str],
+        *,
+        trade_dates: Optional[Sequence[str]] = None,
+    ) -> CapitalFlowSnapshot:
+        normalized_codes = [normalize_stock_code(code) for code in candidate_codes if code]
+        if not normalized_codes:
+            return CapitalFlowSnapshot(source="moneyflow", is_partial=True)
+
+        fallback_trade_date: Optional[str] = None
+        resolved_trade_dates = [str(item) for item in (trade_dates or []) if item]
+        if trade_date in resolved_trade_dates:
+            trade_date_index = resolved_trade_dates.index(trade_date)
+            if trade_date_index + 1 < len(resolved_trade_dates):
+                fallback_trade_date = resolved_trade_dates[trade_date_index + 1]
+        else:
+            earlier_trade_dates = sorted((item for item in resolved_trade_dates if item < trade_date), reverse=True)
+            if earlier_trade_dates:
+                fallback_trade_date = earlier_trade_dates[0]
+
+        candidate_trade_dates = [trade_date]
+        if fallback_trade_date and fallback_trade_date != trade_date:
+            candidate_trade_dates.append(fallback_trade_date)
+
+        for candidate_trade_date in candidate_trade_dates:
+            df = self._call_tushare_cached_paginated(
+                "moneyflow",
+                cache_key=candidate_trade_date,
+                trade_date=candidate_trade_date,
+                fields="ts_code,buy_elg_amount,sell_elg_amount,buy_lg_amount,sell_lg_amount,buy_md_amount,sell_md_amount",
+            )
+            if df is None or df.empty:
+                continue
+
+            work_df = df.copy()
+            work_df["code"] = work_df["ts_code"].astype(str).str.split(".").str[0].map(normalize_stock_code)
+            work_df = work_df[work_df["code"].isin(set(normalized_codes))]
+            if work_df.empty:
+                continue
+
+            for column in ("buy_elg_amount", "sell_elg_amount", "buy_lg_amount", "sell_lg_amount", "buy_md_amount", "sell_md_amount"):
+                work_df[column] = pd.to_numeric(work_df[column], errors="coerce").fillna(0.0)
+
+            notes: List[str] = []
+            is_partial = candidate_trade_date != trade_date
+            if is_partial:
+                notes.append(
+                    f"moneyflow({trade_date}) 为空，已回退到上一交易日 {candidate_trade_date} 的资金流向数据。"
+                )
+
+            flow_by_code: Dict[str, Dict[str, float]] = {}
+            for row in work_df.itertuples(index=False):
+                flow_by_code[str(row.code)] = {
+                    "super_large_net_inflow": float(row.buy_elg_amount) - float(row.sell_elg_amount),
+                    "large_net_inflow": float(row.buy_lg_amount) - float(row.sell_lg_amount),
+                    "medium_net_inflow": float(row.buy_md_amount) - float(row.sell_md_amount),
+                }
+            return CapitalFlowSnapshot(
+                flow_by_code=flow_by_code,
+                source=f"moneyflow:{candidate_trade_date}",
+                is_partial=is_partial,
+                notes=notes,
+            )
+
+        logger.warning("moneyflow 当前与上一交易日均为空，资金流向条件将降级为参考项")
+        return CapitalFlowSnapshot(
+            flow_by_code={},
+            source="unknown",
+            is_partial=True,
+            notes=[f"moneyflow({trade_date}) 及上一交易日均为空，规则11降级为参考项，仅供人工判断。"],
         )
 
     def _load_market_snapshot_fallback(self) -> pd.DataFrame:
@@ -1797,7 +2014,9 @@ class AshareRuleScreenerService:
                         }
                     ]
                 },
+                capital_flow_snapshot=None,
                 config=active_config,
+                optional_checks=("sector_ok", "sector_rank_ok", "capital_flow_ok"),
             )
             if candidate is not None:
                 candidate_codes.append(code)
@@ -2013,6 +2232,10 @@ class AshareRuleScreenerService:
             latest_turnover=latest_turnover,
             config=config,
         )
+        capital_flow_snapshot = self._load_capital_flow_snapshot(
+            trade_date,
+            technical_candidate_codes,
+        )
         sector_snapshot_result = _coerce_sector_snapshot_result(
             self._load_sector_snapshot(
                 technical_candidate_codes,
@@ -2023,20 +2246,32 @@ class AshareRuleScreenerService:
         )
         sector_snapshot = sector_snapshot_result.snapshot
         scoped_history = daily_history[daily_history["code"].isin(technical_candidate_codes)]
+        optional_checks: List[str] = []
+        if not capital_flow_snapshot.flow_by_code:
+            optional_checks.append("capital_flow_ok")
         candidates = apply_selection_rules(
             daily_history=scoped_history,
             latest_turnover=latest_turnover,
             sector_snapshot=sector_snapshot,
+            capital_flow_snapshot=capital_flow_snapshot,
             config=config,
+            optional_checks=optional_checks,
         )
         logger.info(
-            "规则选股%s统计: technical=%s, sector=%s, final=%s",
+            "规则选股%s统计: technical=%s, sector=%s, capital_flow=%s, final=%s",
             stage_name,
             len(technical_candidate_codes),
             _count_sector_matched_codes(
                 sector_snapshot,
                 config.min_sector_change_pct,
                 config.sector_rank_top_n,
+            ),
+            sum(
+                1
+                for flow in capital_flow_snapshot.flow_by_code.values()
+                if flow.get("super_large_net_inflow", 0.0) > 0
+                and flow.get("large_net_inflow", 0.0) > 0
+                and flow.get("medium_net_inflow", 0.0) > 0
             ),
             len(candidates),
         )
@@ -2045,7 +2280,7 @@ class AshareRuleScreenerService:
             technical_candidate_codes=technical_candidate_codes,
             sector_snapshot=sector_snapshot,
             candidates=candidates,
-            data_notes=list(sector_snapshot_result.notes),
+            data_notes=list(sector_snapshot_result.notes) + list(capital_flow_snapshot.notes),
         )
 
     def run(
@@ -2135,12 +2370,18 @@ class AshareRuleScreenerService:
 
         stage_for_technical_pool = relaxed_stage or strict_stage
         if stage_for_technical_pool.technical_candidate_codes:
+            technical_capital_flow_snapshot = self._load_capital_flow_snapshot(
+                latest_trade_date,
+                stage_for_technical_pool.technical_candidate_codes,
+                trade_dates=analysis_trade_dates if 'analysis_trade_dates' in locals() else None,
+            )
             technical_candidates = build_technical_candidate_pool(
                 daily_history=daily_history[
                     daily_history["code"].isin(stage_for_technical_pool.technical_candidate_codes)
                 ],
                 latest_turnover=latest_turnover_snapshot,
                 sector_snapshot=stage_for_technical_pool.sector_snapshot,
+                capital_flow_snapshot=technical_capital_flow_snapshot,
                 config=stage_for_technical_pool.config,
             )
             selected_codes = {
@@ -2184,8 +2425,13 @@ class AshareRuleScreenerService:
                     daily_history=daily_history,
                     latest_turnover=latest_turnover_snapshot,
                     sector_snapshot=manual_sector_snapshot_result.snapshot,
+                    capital_flow_snapshot=self._load_capital_flow_snapshot(
+                        latest_trade_date,
+                        all_candidate_codes,
+                        trade_dates=analysis_trade_dates if 'analysis_trade_dates' in locals() else None,
+                    ),
                     config=manual_review_config,
-                    limit=int(os.getenv("RULE_SCREENER_MANUAL_REVIEW_LIMIT", "20")),
+                    limit=int(os.getenv("RULE_SCREENER_MANUAL_REVIEW_LIMIT", "15")),
                 )
                 _append_unique_notes(profile_notes, manual_sector_snapshot_result.notes)
                 if manual_review_pool:

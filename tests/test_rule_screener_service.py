@@ -69,6 +69,7 @@ def _build_candidate(
         code=code,
         name=name,
         close=21.7,
+        change_pct=4.2,
         ma5=20.96,
         ma10=20.08,
         ma20=18.94,
@@ -80,6 +81,10 @@ def _build_candidate(
         sector_rank=3,
         prior_rise_pct=34.8,
         abc_pattern_confirmed=True,
+        capital_flow_known=True,
+        super_large_net_inflow=2.6,
+        large_net_inflow=1.9,
+        medium_net_inflow=0.8,
         notes=["放量站回20日线", "10日线、20日线保持朝上", "A低点 17.20，B高点 18.70（高于MA20 17.95），C低点 17.60（高于A低点）"],
         abc_a_low_price=17.20,
         abc_b_high_price=18.70,
@@ -171,6 +176,26 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
 
         self.assertEqual(matched, [])
 
+    def test_apply_selection_rules_rejects_when_capital_flow_is_not_all_inflow(self) -> None:
+        history = _build_matching_history("300565")
+        config = AshareRuleConfig()
+
+        matched = apply_selection_rules(
+            daily_history=history,
+            latest_turnover={"300565": 7.6},
+            sector_snapshot={"300565": [{"name": "化工", "change_pct": 2.1, "rank": 3}]},
+            capital_flow_snapshot={
+                "300565": {
+                    "super_large_net_inflow": 2.5,
+                    "large_net_inflow": -0.3,
+                    "medium_net_inflow": 1.1,
+                }
+            },
+            config=config,
+        )
+
+        self.assertEqual(matched, [])
+
     def test_build_technical_candidate_pool_keeps_candidate_when_sector_is_weak(self) -> None:
         history = _build_matching_history("300565")
         config = AshareRuleConfig()
@@ -184,6 +209,27 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
 
         self.assertEqual([item.code for item in matched], ["300565"])
         self.assertIn("板块强度未达筛选阈值", matched[0].notes[-1])
+
+    def test_build_technical_candidate_pool_keeps_candidate_when_capital_flow_is_not_all_inflow(self) -> None:
+        history = _build_matching_history("300565")
+        config = AshareRuleConfig()
+
+        matched = build_technical_candidate_pool(
+            daily_history=history,
+            latest_turnover={"300565": 7.6},
+            sector_snapshot={"300565": [{"name": "化工", "change_pct": 2.1, "rank": 3}]},
+            capital_flow_snapshot={
+                "300565": {
+                    "super_large_net_inflow": 2.5,
+                    "large_net_inflow": -0.3,
+                    "medium_net_inflow": 1.1,
+                }
+            },
+            config=config,
+        )
+
+        self.assertEqual([item.code for item in matched], ["300565"])
+        self.assertIn("资金流向未完全满足", "；".join(matched[0].notes))
 
     def test_classify_market_regime_returns_weak_when_breadth_is_poor(self) -> None:
         snapshot = {
@@ -320,14 +366,16 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         self.assertEqual(config.min_turnover_rate, base.min_turnover_rate)
         self.assertEqual(config.min_sector_change_pct, base.min_sector_change_pct)
         self.assertEqual(config.max_bias_ma5_pct, base.max_bias_ma5_pct)
-        self.assertEqual(adjustments, [])
+        self.assertEqual(config.min_prior_rise_pct, 19.0)
+        self.assertEqual(len(adjustments), 1)
+        self.assertEqual(adjustments[0].name, "前高前累计涨幅")
 
     def test_build_dynamic_rule_config_neutral_relaxes_secondary_thresholds(self) -> None:
         base = AshareRuleConfig()
 
         config, adjustments = _build_dynamic_rule_config(base, "neutral")
 
-        self.assertEqual(config.min_prior_rise_pct, 17.0)
+        self.assertEqual(config.min_prior_rise_pct, 18.5)
         self.assertEqual(config.min_volume_ratio, 0.95)
         self.assertEqual(config.min_turnover_rate, 2.5)
         self.assertEqual(config.min_sector_change_pct, 1.0)
@@ -353,7 +401,7 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
 
         config, adjustments = _build_dynamic_rule_config(base, "weak")
 
-        self.assertEqual(config.min_prior_rise_pct, 16.0)
+        self.assertEqual(config.min_prior_rise_pct, 18.0)
         self.assertEqual(config.min_volume_ratio, 0.9)
         self.assertEqual(config.min_turnover_rate, 2.0)
         self.assertEqual(config.min_sector_change_pct, 1.0)
@@ -406,6 +454,7 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         self.assertIn("所属板块涨幅 > 1%，且涨幅榜排名前 5", report)
         self.assertIn("C浪低点高于A浪低点", report)
         self.assertIn("B浪反弹高于20日线", report)
+        self.assertIn("超大单、大单、中单净流入为正", report)
 
     def test_build_screening_report_renders_layered_sections(self) -> None:
         report = build_screening_report(
@@ -485,7 +534,33 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         )
 
         self.assertIn("## 优先关注（前 10 只）", report)
+        self.assertIn("排序依据：行业涨幅排名、行业涨幅、当日涨幅、量比、换手率、ABC 结构质量、资金流向。", report)
         self.assertIn("样本股1 (300490)", report)
+
+    def test_build_screening_report_adds_focus_section_even_when_candidate_count_is_under_limit(self) -> None:
+        technical_candidates = []
+        for idx in range(3):
+            candidate = _build_candidate(
+                f"{300600 + idx}",
+                name=f"候选股{idx + 1}",
+                sector_name="电子",
+                sector_change_pct=2.4 - idx * 0.1,
+            )
+            candidate.sector_rank = idx + 1
+            candidate.volume_ratio = 1.6 + idx * 0.1
+            candidate.turnover_rate = 4.0 + idx
+            candidate.close = 18.0 + idx
+            candidate.ma20 = 17.5 + idx
+            technical_candidates.append(candidate)
+
+        report = build_screening_report(
+            candidates=[],
+            report_date="2026-04-13",
+            grouped_candidates=RuleScreeningBuckets(technical_pool=technical_candidates),
+        )
+
+        self.assertIn("## 优先关注（前 3 只）", report)
+        self.assertIn("候选股1 (300600)", report)
 
     def test_build_screening_report_renders_layered_sections_from_dataclass(self) -> None:
         report = build_screening_report(
