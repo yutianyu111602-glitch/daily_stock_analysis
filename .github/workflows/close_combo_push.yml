@@ -38,11 +38,11 @@ jobs:
       - name: 恢复规则选股缓存
         uses: actions/cache@v4
         with:
-          path: .cache/rule_screener_v2
-          key: ${{ runner.os }}-rule-screener-v2-close-${{ github.ref_name }}-${{ github.run_id }}
+          path: .cache/rule_screener_v3
+          key: ${{ runner.os }}-rule-screener-v3-sector-close-${{ github.ref_name }}-${{ github.run_id }}
           restore-keys: |
-            ${{ runner.os }}-rule-screener-v2-close-${{ github.ref_name }}-
-            ${{ runner.os }}-rule-screener-v2-${{ github.ref_name }}-
+            ${{ runner.os }}-rule-screener-v3-sector-close-${{ github.ref_name }}-
+            ${{ runner.os }}-rule-screener-v3-sector-${{ github.ref_name }}-
 
       - name: 生成并发送收盘综合推送
         env:
@@ -88,7 +88,7 @@ jobs:
           RULE_SCREENER_DYNAMIC_MODE: "${{ vars.RULE_SCREENER_DYNAMIC_MODE || 'true' }}"
           RULE_SCREENER_ALLOW_EMPTY_REPORT: "${{ vars.RULE_SCREENER_ALLOW_EMPTY_REPORT || 'false' }}"
           RULE_SCREENER_MANUAL_REVIEW_LIMIT: "${{ vars.RULE_SCREENER_MANUAL_REVIEW_LIMIT || '20' }}"
-          RULE_SCREENER_CACHE_DIR: .cache/rule_screener_v2/tushare
+          RULE_SCREENER_CACHE_DIR: .cache/rule_screener_v3/tushare
         run: |
           ARGS=""
           if [ "${{ github.event.inputs.ai_review || 'false' }}" = "true" ]; then

@@ -1389,6 +1389,66 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         self.assertEqual(snapshot["300490"][0]["name"], "基础化工")
         self.assertAlmostEqual(snapshot["300490"][0]["change_pct"], 1.4)
 
+    def test_build_sector_snapshot_from_tushare_normalizes_cached_date_values(self) -> None:
+        index_member_df = pd.DataFrame(
+            [
+                {
+                    "l1_code": " 801080.SI ",
+                    "l1_name": "电子",
+                    "ts_code": "300054.SZ",
+                    "name": "鼎龙股份",
+                    "in_date": 20210730.0,
+                    "out_date": float("nan"),
+                    "is_new": "Y",
+                },
+            ]
+        )
+        sw_daily_df = pd.DataFrame(
+            [
+                {"ts_code": "801080.SI", "name": "电子", "pct_change": -1.53},
+            ]
+        )
+
+        snapshot = _build_sector_snapshot_from_tushare(
+            index_member_df=index_member_df,
+            sw_daily_df=sw_daily_df,
+            candidate_codes=["300054"],
+            trade_date="20260413",
+        )
+
+        self.assertEqual(snapshot["300054"][0]["name"], "电子")
+        self.assertAlmostEqual(snapshot["300054"][0]["change_pct"], -1.53)
+
+    def test_build_sector_snapshot_from_tushare_falls_back_to_current_membership(self) -> None:
+        index_member_df = pd.DataFrame(
+            [
+                {
+                    "l1_code": "801730.SI",
+                    "l1_name": "电力设备",
+                    "ts_code": "600875.SH",
+                    "name": "东方电气",
+                    "in_date": "20990101",
+                    "out_date": "",
+                    "is_new": "Y",
+                },
+            ]
+        )
+        sw_daily_df = pd.DataFrame(
+            [
+                {"ts_code": "801730.SI", "name": "电力设备", "pct_change": -0.95},
+            ]
+        )
+
+        snapshot = _build_sector_snapshot_from_tushare(
+            index_member_df=index_member_df,
+            sw_daily_df=sw_daily_df,
+            candidate_codes=["600875"],
+            trade_date="20260413",
+        )
+
+        self.assertEqual(snapshot["600875"][0]["name"], "电力设备")
+        self.assertAlmostEqual(snapshot["600875"][0]["change_pct"], -0.95)
+
     def test_call_tushare_cached_ignores_empty_cache_and_refetches(self) -> None:
         with TemporaryDirectory() as tmpdir:
             service = object.__new__(AshareRuleScreenerService)

@@ -571,12 +571,42 @@ def _build_sector_snapshot_from_tushare(
     candidate_codes: Sequence[str],
     trade_date: str,
 ) -> Dict[str, List[Dict[str, Any]]]:
+    def normalize_date_value(value: Any) -> str:
+        if value is None or pd.isna(value):
+            return ""
+        text = str(value).strip()
+        if text.lower() in {"none", "nan", "nat"}:
+            return ""
+        if text.endswith(".0") and text[:-2].isdigit():
+            return text[:-2]
+        return text
+
+    def build_from_members(active_members: pd.DataFrame) -> Dict[str, List[Dict[str, Any]]]:
+        current_snapshot: Dict[str, List[Dict[str, Any]]] = {code: [] for code in snapshot}
+        for code in current_snapshot:
+            rows = active_members[active_members["stock_code"] == code]
+            matched: List[Dict[str, Any]] = []
+            for row in rows.itertuples(index=False):
+                sector = sector_map.get(str(getattr(row, "l1_code", "")).strip())
+                if sector is None:
+                    continue
+                matched.append(
+                    {
+                        "name": str(getattr(row, "l1_name", "") or sector["name"]),
+                        "change_pct": sector["change_pct"],
+                        "rank": int(sector.get("rank") or 0),
+                    }
+                )
+            matched.sort(key=lambda item: ((item.get("rank") or 10_000), -(item.get("change_pct") or 0.0)))
+            current_snapshot[code] = matched[:1]
+        return current_snapshot
+
     snapshot: Dict[str, List[Dict[str, Any]]] = {normalize_stock_code(code): [] for code in candidate_codes}
     if index_member_df is None or index_member_df.empty or sw_daily_df is None or sw_daily_df.empty:
         return snapshot
 
     sector_df = sw_daily_df.copy()
-    sector_df["ts_code"] = sector_df["ts_code"].astype(str)
+    sector_df["ts_code"] = sector_df["ts_code"].astype(str).str.strip()
     sector_df["pct_change"] = pd.to_numeric(sector_df["pct_change"], errors="coerce").fillna(0.0)
     sector_df = sector_df.sort_values("pct_change", ascending=False).reset_index(drop=True)
     sector_df["rank"] = sector_df.index + 1
@@ -591,33 +621,33 @@ def _build_sector_snapshot_from_tushare(
 
     member_df = index_member_df.copy()
     member_df["stock_code"] = member_df["ts_code"].astype(str).str.split(".").str[0].map(normalize_stock_code)
-    member_df["in_date"] = member_df["in_date"].astype(str)
-    member_df["out_date"] = member_df["out_date"].astype(str)
+    member_df["l1_code"] = member_df["l1_code"].astype(str).str.strip()
+    member_df["in_date"] = member_df["in_date"].map(normalize_date_value)
+    member_df["out_date"] = member_df["out_date"].map(normalize_date_value)
     active_df = member_df[
         (member_df["in_date"] <= str(trade_date))
         & (
-            member_df["out_date"].isin(["None", "nan", "NaT", ""])
+            member_df["out_date"].eq("")
             | (member_df["out_date"] >= str(trade_date))
         )
     ]
 
-    for code in snapshot:
-        rows = active_df[active_df["stock_code"] == code]
-        matched: List[Dict[str, Any]] = []
-        for row in rows.itertuples(index=False):
-            sector = sector_map.get(str(row.l1_code))
-            if sector is None:
-                continue
-            matched.append(
-                {
-                    "name": str(row.l1_name) or sector["name"],
-                    "change_pct": sector["change_pct"],
-                    "rank": int(sector.get("rank") or 0),
-                }
-            )
-        matched.sort(key=lambda item: ((item.get("rank") or 10_000), -(item.get("change_pct") or 0.0)))
-        snapshot[code] = matched[:1]
-    return snapshot
+    snapshot = build_from_members(active_df)
+    if any(snapshot.values()):
+        return snapshot
+
+    # Tushare's current industry membership is marked by is_new=Y. If date
+    # normalization or cached historical membership makes the date window empty,
+    # keep sector information available for manual review instead of reporting
+    # every candidate as "暂无板块数据".
+    if "is_new" in member_df.columns:
+        latest_df = member_df[member_df["is_new"].astype(str).str.upper().eq("Y")]
+        if not latest_df.empty:
+            fallback_snapshot = build_from_members(latest_df)
+            if any(fallback_snapshot.values()):
+                return fallback_snapshot
+
+    return build_from_members(member_df)
 
 
 def _merge_index_member_frames(frames: Sequence[pd.DataFrame]) -> pd.DataFrame:
@@ -1485,7 +1515,7 @@ class AshareRuleScreenerService:
         self.fetcher_manager = fetcher_manager or DataFetcherManager()
         self.tushare_fetcher = tushare_fetcher or self._resolve_tushare_fetcher()
         self.notifier = notifier or NotificationService()
-        self.cache_dir = Path(os.getenv("RULE_SCREENER_CACHE_DIR", ".cache/rule_screener_v2/tushare"))
+        self.cache_dir = Path(os.getenv("RULE_SCREENER_CACHE_DIR", ".cache/rule_screener_v3/tushare"))
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _resolve_tushare_fetcher(self) -> "TushareFetcher":
@@ -1498,7 +1528,7 @@ class AshareRuleScreenerService:
 
     def _cache_file(self, api_name: str, cache_key: str) -> Path:
         safe_key = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in str(cache_key))
-        cache_root = getattr(self, "cache_dir", Path(os.getenv("RULE_SCREENER_CACHE_DIR", ".cache/rule_screener_v2/tushare")))
+        cache_root = getattr(self, "cache_dir", Path(os.getenv("RULE_SCREENER_CACHE_DIR", ".cache/rule_screener_v3/tushare")))
         if not isinstance(cache_root, Path):
             cache_root = Path(str(cache_root))
         cache_root.mkdir(parents=True, exist_ok=True)
