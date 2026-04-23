@@ -12,11 +12,13 @@ import pandas as pd
 from src.services.rule_screener_service import (
     AshareRuleScreenerService,
     AshareRuleConfig,
+    CapitalFlowSnapshot,
     DynamicAdjustment,
     RuleScreeningCandidate,
     RuleScreeningBuckets,
     TurnoverSnapshot,
     _detect_abc_pattern,
+    _build_sector_zero_relaxed_config,
     _rank_candidates_for_father,
     _build_dynamic_rule_config,
     _build_sector_snapshot_from_tushare,
@@ -774,6 +776,67 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         )
 
         self.assertIn("板块强度阈值：1.0 -> 0.8（严格档无结果）", report)
+
+    def test_build_sector_zero_relaxed_config_uses_limited_sector_relaxation(self) -> None:
+        base = AshareRuleConfig(min_sector_change_pct=1.0, sector_rank_top_n=5)
+
+        first_level_config, first_level_notes = _build_sector_zero_relaxed_config(
+            base,
+            {
+                "300565": [{"name": "石油石化", "change_pct": 2.7, "rank": 12}],
+                "300490": [{"name": "电力设备", "change_pct": -0.9, "rank": 257}],
+            },
+        )
+        second_level_config, second_level_notes = _build_sector_zero_relaxed_config(
+            base,
+            {
+                "300565": [{"name": "公用事业", "change_pct": 1.4, "rank": 31}],
+            },
+        )
+
+        self.assertEqual(first_level_config.sector_rank_top_n, 20)
+        self.assertAlmostEqual(first_level_config.min_sector_change_pct, 0.8)
+        self.assertIn("行业前20", first_level_notes[0])
+        self.assertEqual(second_level_config.sector_rank_top_n, 50)
+        self.assertAlmostEqual(second_level_config.min_sector_change_pct, 0.0)
+        self.assertIn("行业前50", second_level_notes[0])
+
+    def test_run_relaxes_sector_gate_when_sector_count_is_zero(self) -> None:
+        service = _build_service(
+            config=AshareRuleConfig(auto_relax_if_empty=True),
+            daily_history=_build_matching_history("300565"),
+            latest_turnover={"300565": 7.6},
+        )
+        service.fetcher_manager.get_market_stats.return_value = {
+            "index_change": {"sh": 0.1, "sz": 0.0, "cyb": -0.1},
+            "up_count": 2400,
+            "down_count": 2300,
+            "limit_up_count": 40,
+            "limit_down_count": 12,
+            "sector_median": 0.0,
+        }
+        service._select_technical_candidates.return_value = ["300565"]
+        service._load_sector_snapshot.return_value = {
+            "300565": [{"name": "石油石化", "change_pct": 2.7, "rank": 12}],
+        }
+        service._load_capital_flow_snapshot = MagicMock(return_value=CapitalFlowSnapshot())
+        captured_configs: list[AshareRuleConfig] = []
+        strict_candidate = _build_candidate("300565", name="科信技术", sector_name="石油石化", sector_change_pct=2.7)
+
+        def fake_apply_selection_rules(*args, **kwargs):
+            captured_configs.append(kwargs["config"])
+            return [strict_candidate]
+
+        with patch("src.services.rule_screener_service.apply_selection_rules", side_effect=fake_apply_selection_rules), \
+             patch("src.services.rule_screener_service.build_technical_candidate_pool", return_value=[]):
+            result = service.run(send_notification=False, ai_review=False)
+
+        self.assertEqual(captured_configs[0].sector_rank_top_n, 20)
+        self.assertAlmostEqual(captured_configs[0].min_sector_change_pct, 0.8)
+        self.assertEqual(result.profile_name, "严格版（板块适度放宽）")
+        self.assertIn("板块适度放宽", result.report)
+        self.assertIn("现条件：涨幅 > 0.8% 且排名前 20", result.report)
+        self.assertEqual([item.code for item in result.candidates], ["300565"])
 
     def test_run_uses_market_regime_driven_dynamic_rule_config_when_strict_is_empty(self) -> None:
         service = _build_service(config=AshareRuleConfig(auto_relax_if_empty=True))

@@ -697,6 +697,57 @@ def _count_sector_matched_codes(
     )
 
 
+def _build_sector_zero_relaxed_config(
+    base: AshareRuleConfig,
+    sector_snapshot: Dict[str, List[Dict[str, Any]]],
+) -> tuple[AshareRuleConfig, List[str]]:
+    if not sector_snapshot or not any(sector_snapshot.values()):
+        return base, []
+    if _count_sector_matched_codes(sector_snapshot, base.min_sector_change_pct, base.sector_rank_top_n) > 0:
+        return base, []
+
+    relaxed_levels = [
+        (
+            max(int(base.sector_rank_top_n), 20),
+            min(float(base.min_sector_change_pct), 0.8),
+            "行业前5无命中，先放宽到行业前20且涨幅不低于0.8%",
+        ),
+        (
+            max(int(base.sector_rank_top_n), 50),
+            min(float(base.min_sector_change_pct), 0.0),
+            "行业前20仍无命中，再放宽到行业前50且行业涨幅不为负",
+        ),
+    ]
+    for target_rank, target_change, reason in relaxed_levels:
+        relaxed_config = replace(
+            base,
+            sector_rank_top_n=target_rank,
+            min_sector_change_pct=target_change,
+        )
+        if _count_sector_matched_codes(
+            sector_snapshot,
+            relaxed_config.min_sector_change_pct,
+            relaxed_config.sector_rank_top_n,
+        ) > 0:
+            notes = [
+                (
+                    "按原板块条件命中为 0，已适度放宽行业条件："
+                    f"{reason}（原条件：涨幅 > {_format_rule_threshold(base.min_sector_change_pct)}%"
+                    f" 且排名前 {base.sector_rank_top_n}；"
+                    f"现条件：涨幅 > {_format_rule_threshold(relaxed_config.min_sector_change_pct)}%"
+                    f" 且排名前 {relaxed_config.sector_rank_top_n}）。"
+                )
+            ]
+            return relaxed_config, notes
+
+    return base, [
+        (
+            "按原板块条件命中为 0；已检查行业前20/前50放宽档，仍未出现可用板块命中，"
+            "本轮继续保留技术候选池供人工精选。"
+        )
+    ]
+
+
 def _extract_snapshot_float(snapshot: Dict[str, Any], *keys: str) -> float:
     for key in keys:
         value = snapshot.get(key)
@@ -2278,6 +2329,10 @@ class AshareRuleScreenerService:
             technical_candidate_codes,
         )
         sector_snapshot = sector_snapshot_result.snapshot
+        active_config, sector_relax_notes = _build_sector_zero_relaxed_config(
+            config,
+            sector_snapshot,
+        )
         scoped_history = daily_history[daily_history["code"].isin(technical_candidate_codes)]
         optional_checks: List[str] = []
         if not capital_flow_snapshot.flow_by_code:
@@ -2287,7 +2342,7 @@ class AshareRuleScreenerService:
             latest_turnover=latest_turnover,
             sector_snapshot=sector_snapshot,
             capital_flow_snapshot=capital_flow_snapshot,
-            config=config,
+            config=active_config,
             optional_checks=optional_checks,
         )
         logger.info(
@@ -2296,8 +2351,8 @@ class AshareRuleScreenerService:
             len(technical_candidate_codes),
             _count_sector_matched_codes(
                 sector_snapshot,
-                config.min_sector_change_pct,
-                config.sector_rank_top_n,
+                active_config.min_sector_change_pct,
+                active_config.sector_rank_top_n,
             ),
             sum(
                 1
@@ -2309,11 +2364,11 @@ class AshareRuleScreenerService:
             len(candidates),
         )
         return RuleScreeningStageResult(
-            config=config,
+            config=active_config,
             technical_candidate_codes=technical_candidate_codes,
             sector_snapshot=sector_snapshot,
             candidates=candidates,
-            data_notes=list(sector_snapshot_result.notes) + list(capital_flow_snapshot.notes),
+            data_notes=list(sector_snapshot_result.notes) + list(capital_flow_snapshot.notes) + sector_relax_notes,
         )
 
     def run(
@@ -2357,17 +2412,24 @@ class AshareRuleScreenerService:
         profile_notes.append(
             "严格版诊断：技术形态命中 "
             f"{len(strict_stage.technical_candidate_codes)} 只，板块强度命中 "
-            f"{_count_sector_matched_codes(strict_stage.sector_snapshot, self.rule_config.min_sector_change_pct, self.rule_config.sector_rank_top_n)} 只，"
+            f"{_count_sector_matched_codes(strict_stage.sector_snapshot, strict_stage.config.min_sector_change_pct, strict_stage.config.sector_rank_top_n)} 只，"
             f"最终入选 {len(strict_stage.candidates)} 只。"
         )
+        active_config = strict_stage.config
         final_stage = strict_stage
         relaxed_stage: Optional[RuleScreeningStageResult] = None
         _append_unique_notes(profile_notes, strict_stage.data_notes)
         if strict_stage.candidates:
+            if (
+                strict_stage.config.min_sector_change_pct != self.rule_config.min_sector_change_pct
+                or strict_stage.config.sector_rank_top_n != self.rule_config.sector_rank_top_n
+            ):
+                profile_name = "严格版（板块适度放宽）"
             grouped_candidates.full_hits = list(strict_stage.candidates)
         else:
             if self.rule_config.auto_relax_if_empty:
                 active_config, dynamic_adjustments = _build_dynamic_rule_config(self.rule_config, market_regime)
+                relaxed_base_config = active_config
                 profile_name = "动态放宽版"
                 profile_notes.append(f"严格条件为 0，已按 {market_regime_label} 进入动态放宽。")
                 profile_notes.extend(
@@ -2381,13 +2443,19 @@ class AshareRuleScreenerService:
                     stage_name="动态放宽版",
                 )
                 final_stage = relaxed_stage
+                active_config = relaxed_stage.config
                 _append_unique_notes(profile_notes, relaxed_stage.data_notes)
                 profile_notes.append(
                     f"{profile_name}诊断：技术形态命中 "
                     f"{len(relaxed_stage.technical_candidate_codes)} 只，板块强度命中 "
-                    f"{_count_sector_matched_codes(relaxed_stage.sector_snapshot, active_config.min_sector_change_pct, active_config.sector_rank_top_n)} 只，"
+                    f"{_count_sector_matched_codes(relaxed_stage.sector_snapshot, relaxed_stage.config.min_sector_change_pct, relaxed_stage.config.sector_rank_top_n)} 只，"
                     f"最终入选 {len(relaxed_stage.candidates)} 只。"
                 )
+                if (
+                    relaxed_stage.config.min_sector_change_pct != relaxed_base_config.min_sector_change_pct
+                    or relaxed_stage.config.sector_rank_top_n != relaxed_base_config.sector_rank_top_n
+                ):
+                    profile_name = "动态放宽版（板块适度放宽）"
                 if relaxed_stage.candidates:
                     grouped_candidates.relaxed_hits = list(relaxed_stage.candidates)
             else:
