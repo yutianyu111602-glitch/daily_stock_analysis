@@ -41,6 +41,7 @@ python scripts/check_ai_assets.py
 ## 3. 仓库速览
 
 - 项目定位：股票智能分析系统，覆盖 A 股、港股、美股。
+- 最新项目接手文档：`docs/PROJECT_HANDOFF_2026-04-27.md`。
 - 主流程：抓取数据 -> 技术分析/新闻检索 -> LLM 分析 -> 生成报告 -> 通知推送。
 - 关键入口：
   - `main.py`：分析任务主入口

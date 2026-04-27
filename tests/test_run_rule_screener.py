@@ -131,6 +131,7 @@ class RunRuleScreenerEnvTestCase(unittest.TestCase):
                 "市场环境：弱势日",
                 "动态放宽：板块涨幅阈值：1.0 -> 0.8（弱势日放宽板块强度）",
             ],
+            buckets=None,
         )
         fake_args = SimpleNamespace(debug=False, no_notify=False, no_ai_review=False)
 
