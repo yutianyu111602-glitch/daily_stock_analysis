@@ -168,6 +168,7 @@ class RuleScreeningRunResult:
     profile_name: str
     profile_notes: List[str]
     stock_pool_notes: List[str]
+    buckets: Optional[RuleScreeningBuckets] = None
 
 
 @dataclass
@@ -2609,4 +2610,5 @@ class AshareRuleScreenerService:
             profile_name=profile_name,
             profile_notes=profile_notes,
             stock_pool_notes=stock_pool_notes,
+            buckets=grouped_candidates,
         )

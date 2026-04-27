@@ -17,6 +17,7 @@ from src.core.pipeline import StockAnalysisPipeline
 from src.logging_config import setup_logging
 from src.notification import NotificationService
 from src.services.rule_screener_service import AshareRuleScreenerService
+from src.services.virtual_trading_service import VirtualTradingConfig, VirtualTradingService
 
 
 logger = logging.getLogger(__name__)
@@ -101,6 +102,26 @@ def main() -> int:
         send_notification=False,
         ai_review=args.ai_review,
     )
+
+    if (
+        os.getenv("VIRTUAL_TRADING_ENABLED", "").strip().lower() == "true"
+        and screener_result.buckets
+        and not screener_result.buckets.is_empty()
+    ):
+        vt_config = VirtualTradingConfig(enabled=True)
+        vt_service = VirtualTradingService(notifier=notifier, config=vt_config)
+        vt_result = vt_service.execute_from_screening_buckets(
+            buckets=screener_result.buckets,
+            trade_date=screener_result.trade_date,
+            send_notification=True,
+        )
+        logger.info(
+            "虚拟盘执行完成: trades=%s skipped=%s",
+            len(vt_result.trades),
+            len(vt_result.skipped),
+        )
+        if vt_result.trades:
+            logger.info("虚拟盘成交: %s", [t.get("symbol") for t in vt_result.trades])
 
     report_date = screener_result.trade_date or datetime.now().strftime("%Y%m%d")
     combined_content = build_combined_close_content(
