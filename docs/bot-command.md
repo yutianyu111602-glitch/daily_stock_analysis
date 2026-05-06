@@ -191,6 +191,10 @@ class CommandDispatcher:
 
 | /batch | /b, 批量 | 批量分析自选股 | `/batch` |
 
+| /rules | /r, 选股, 筛选, 规则选股 | 自然语言规则选股 | `选股 量比大于1，换手大于3，行业前五，精选10只` |
+
+`/rules` 会优先用 DeepSeek 通过工具调用 schema 理解口语化规则，再映射为安全白名单参数；DeepSeek 不可用时回退到本地规则解析。
+
 | /help | /h, 帮助 | 显示帮助信息 | `/help` |
 
 | /status | /s, 状态 | 系统状态 | `/status` |

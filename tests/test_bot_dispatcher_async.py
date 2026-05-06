@@ -91,6 +91,18 @@ class TestCommandDispatcherAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.text, "async-ok")
         command.execute_async.assert_awaited_once()
 
+    async def test_rule_screener_text_routes_before_generic_nl_routing(self):
+        dispatcher = CommandDispatcher()
+        rules_command = DummyCommand()
+        rules_command.execute_async = AsyncMock(return_value=BotResponse.text_response("rules-ok"))
+        dispatcher.register(rules_command)
+        dispatcher._commands["rules"] = rules_command
+
+        result = await dispatcher.dispatch_async(_make_message("按新规则筛一下，量比大于1，换手大于3，行业前五"))
+
+        self.assertEqual(result.text, "rules-ok")
+        rules_command.execute_async.assert_awaited_once()
+
     async def test_parse_intent_via_llm_offloads_to_thread(self):
         fake_response = SimpleNamespace(
             content='{"intent":"analysis","codes":["600519"],"strategy":null}',

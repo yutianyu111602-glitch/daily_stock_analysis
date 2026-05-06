@@ -15,7 +15,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from src.config import get_config, setup_env
 from src.logging_config import setup_logging
-from src.services.nl_rule_screener_service import parse_natural_language_rule
+from src.services.nl_rule_screener_service import parse_natural_language_rule_with_llm
 from src.services.rule_screener_service import AshareRuleScreenerService
 
 try:
@@ -66,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
     if not rule_text:
         raise SystemExit("必须提供自然语言规则文本，或设置 RULE_SCREENER_NL_RULE_TEXT")
 
-    profile = parse_natural_language_rule(rule_text)
+    profile = parse_natural_language_rule_with_llm(rule_text)
     rule_config = profile.to_rule_config(session=args.session)
     os.environ["RULE_SCREENER_PUSH_CANDIDATE_LIMIT"] = str(profile.limit)
     os.environ["RULE_SCREENER_FOCUS_POOL_LIMIT"] = str(profile.limit)

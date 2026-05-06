@@ -297,6 +297,9 @@ class CommandDispatcher:
             return early_response
 
         if cmd_name is None:
+            rule_result = self._try_rule_screener_routing_sync(message)
+            if rule_result is not None:
+                return rule_result
             nl_result = self._try_nl_routing_sync(message)
             if nl_result is not None:
                 return nl_result
@@ -334,6 +337,9 @@ class CommandDispatcher:
             return early_response
 
         if cmd_name is None:
+            rule_result = await self._try_rule_screener_routing(message)
+            if rule_result is not None:
+                return rule_result
             # Not a command — try natural language routing before falling back
             nl_result = await self._try_nl_routing(message)
             if nl_result is not None:
@@ -370,6 +376,37 @@ class CommandDispatcher:
             getter: 回调函数，返回命令列表
         """
         self._help_command_getter = getter
+
+    async def _try_rule_screener_routing(self, message: BotMessage) -> Optional[BotResponse]:
+        """Deterministically route rule-screening text before generic LLM NL routing."""
+        if not self._should_route_rule_screener_message(message):
+            return None
+        command = self.get_command("rules")
+        if command is None:
+            return None
+        logger.info("[Dispatcher] rule screener routing → /rules: %s", message.content[:80])
+        return await command.execute_async(message, [message.content.strip()])
+
+    def _try_rule_screener_routing_sync(self, message: BotMessage) -> Optional[BotResponse]:
+        if not self._should_route_rule_screener_message(message):
+            return None
+        command = self.get_command("rules")
+        if command is None:
+            return None
+        logger.info("[Dispatcher] rule screener routing → /rules: %s", message.content[:80])
+        return command.execute(message, [message.content.strip()])
+
+    @staticmethod
+    def _should_route_rule_screener_message(message: BotMessage) -> bool:
+        from src.services.nl_rule_screener_service import looks_like_rule_screener_request
+
+        is_private = message.chat_type.value == "private"
+        if not is_private and not message.mentioned:
+            return False
+        text = (message.content or "").strip()
+        if not text or len(text) > 800:
+            return False
+        return looks_like_rule_screener_request(text)
 
     # ------------------------------------------------------------------ #
     #  Natural language routing (LLM-based)                              #

@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from src.services.nl_rule_screener_service import parse_natural_language_rule
+from src.services.nl_rule_screener_service import (
+    looks_like_rule_screener_request,
+    parse_natural_language_rule,
+    parse_natural_language_rule_with_llm,
+)
 
 
 FATHER_RULE_TEXT = """
@@ -80,6 +85,55 @@ class NaturalLanguageRuleParserTest(unittest.TestCase):
         self.assertEqual(config.min_volume_ratio, 1.2)
         self.assertEqual(config.min_turnover_rate, 4.0)
         self.assertEqual(config.sector_rank_top_n, 3)
+
+    def test_detects_rule_screener_requests_without_command_prefix(self) -> None:
+        self.assertTrue(looks_like_rule_screener_request("按新规则筛一下，量比大于1，换手大于3，行业前五"))
+        self.assertTrue(looks_like_rule_screener_request("ABC调整后，5日线乖离率小于9，超大单大单中单流入"))
+        self.assertFalse(looks_like_rule_screener_request("帮我分析一下600519"))
+
+    def test_llm_parser_maps_colloquial_voice_text_to_rule_profile(self) -> None:
+        fake_response = SimpleNamespace(
+            content=None,
+            tool_calls=[
+                SimpleNamespace(
+                    name="run_ashare_rule_screener",
+                    arguments={
+                        "min_prior_rise_pct": 20,
+                        "min_volume_ratio": None,
+                        "min_turnover_rate": 3,
+                        "morning_min_turnover_rate": 3,
+                        "afternoon_min_turnover_rate": 5,
+                        "min_sector_change_pct": 1,
+                        "max_bias_ma5_pct": 9,
+                        "sector_rank_top_n": 5,
+                        "limit": 10,
+                        "require_abc": True,
+                        "require_close_above_ma20": True,
+                        "require_ma10_ma20_up": True,
+                        "require_c_low_gt_a_low": True,
+                        "require_b_high_above_ma20": True,
+                        "require_capital_flow_all_positive": True,
+                    },
+                )
+            ],
+        )
+        config = SimpleNamespace(agent_litellm_model="", litellm_model="deepseek/deepseek-chat")
+
+        with patch("src.agent.llm_adapter.LLMToolAdapter") as adapter_cls:
+            adapter = adapter_cls.return_value
+            adapter.call_with_tools.return_value = fake_response
+            profile = parse_natural_language_rule_with_llm(
+                "十点半给我整十来个，成交活跃点，换手不能太低三以上，板块得排前五，别离五日线太远九以内",
+                config=config,
+            )
+
+        self.assertEqual(profile.min_turnover_rate, 3.0)
+        self.assertEqual(profile.afternoon_min_turnover_rate, 5.0)
+        self.assertEqual(profile.sector_rank_top_n, 5)
+        self.assertEqual(profile.limit, 10)
+        self.assertTrue(profile.require_capital_flow_all_positive)
+        self.assertIn("deepseek", profile.parser_source)
+        adapter.call_with_tools.assert_called_once()
 
 
 if __name__ == "__main__":
