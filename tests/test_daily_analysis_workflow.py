@@ -58,6 +58,8 @@ class RuleScreenerWorkflowTestCase(unittest.TestCase):
         self.assertIn('RULE_SCREENER_ALLOW_EMPTY_REPORT: "${{ vars.RULE_SCREENER_ALLOW_EMPTY_REPORT || \'false\' }}"', workflow)
         self.assertIn('RULE_SCREENER_MANUAL_REVIEW_LIMIT: "${{ vars.RULE_SCREENER_MANUAL_REVIEW_LIMIT || \'15\' }}"', workflow)
         self.assertIn('RULE_SCREENER_FOCUS_POOL_LIMIT: "${{ vars.RULE_SCREENER_FOCUS_POOL_LIMIT || \'10\' }}"', workflow)
+        self.assertIn('RULE_SCREENER_NL_RULE_TEXT: "${{ github.event.inputs.rule_text || \'\' }}"', workflow)
+        self.assertIn('RULE_SCREENER_NL_SESSION: "${{ github.event.inputs.session || \'auto\' }}"', workflow)
         self.assertIn('RULE_SCREENER_DEBUG_SECTOR: "${{ vars.RULE_SCREENER_DEBUG_SECTOR || \'true\' }}"', workflow)
         self.assertIn('RULE_SCREENER_DEBUG_REGIME: "${{ vars.RULE_SCREENER_DEBUG_REGIME || \'true\' }}"', workflow)
         self.assertIn("RULE_SCREENER_AUTO_RELAX_IF_EMPTY: ${{ vars.RULE_SCREENER_AUTO_RELAX_IF_EMPTY || 'true' }}", workflow)
@@ -86,6 +88,7 @@ class RuleScreenerWorkflowTestCase(unittest.TestCase):
         self.assertIn('if [ "${{ github.event_name }}" = "schedule" ]; then', workflow)
         self.assertIn('ARGS="$ARGS --no-ai-review"', workflow)
         self.assertIn("python scripts/run_rule_screener.py", workflow)
+        self.assertIn("python scripts/run_nl_rule_screener.py", workflow)
 
 
 class CloseComboWorkflowTestCase(unittest.TestCase):

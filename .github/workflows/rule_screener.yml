@@ -11,6 +11,20 @@ on:
         required: false
         default: true
         type: boolean
+      rule_text:
+        description: "可选：自然语言选股规则；留空则使用默认规则"
+        required: false
+        default: ""
+        type: string
+      session:
+        description: "自然语言规则的分时阈值"
+        required: false
+        default: "auto"
+        type: choice
+        options:
+          - auto
+          - morning
+          - afternoon
 
 concurrency:
   group: ashare-rule-screener
@@ -118,6 +132,8 @@ jobs:
           RULE_SCREENER_ALLOW_EMPTY_REPORT: "${{ vars.RULE_SCREENER_ALLOW_EMPTY_REPORT || 'false' }}"
           RULE_SCREENER_MANUAL_REVIEW_LIMIT: "${{ vars.RULE_SCREENER_MANUAL_REVIEW_LIMIT || '15' }}"
           RULE_SCREENER_FOCUS_POOL_LIMIT: "${{ vars.RULE_SCREENER_FOCUS_POOL_LIMIT || '10' }}"
+          RULE_SCREENER_NL_RULE_TEXT: "${{ github.event.inputs.rule_text || '' }}"
+          RULE_SCREENER_NL_SESSION: "${{ github.event.inputs.session || 'auto' }}"
           RULE_SCREENER_DEBUG_SECTOR: "${{ vars.RULE_SCREENER_DEBUG_SECTOR || 'true' }}"
           RULE_SCREENER_DEBUG_REGIME: "${{ vars.RULE_SCREENER_DEBUG_REGIME || 'true' }}"
         run: |
@@ -128,4 +144,8 @@ jobs:
           elif [ "${{ github.event.inputs.ai_review || 'true' }}" != "true" ]; then
             ARGS="$ARGS --no-ai-review"
           fi
-          python scripts/run_rule_screener.py $ARGS
+          if [ -n "$RULE_SCREENER_NL_RULE_TEXT" ]; then
+            python scripts/run_nl_rule_screener.py "$RULE_SCREENER_NL_RULE_TEXT" --session "$RULE_SCREENER_NL_SESSION" $ARGS
+          else
+            python scripts/run_rule_screener.py $ARGS
+          fi
