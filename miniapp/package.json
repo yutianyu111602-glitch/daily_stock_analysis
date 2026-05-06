@@ -1,0 +1,18 @@
+{
+  "name": "daily-stock-analysis-miniapp",
+  "private": true,
+  "version": "0.1.0",
+  "description": "WeChat Mini Program for natural-language A-share rule screening.",
+  "scripts": {
+    "preview": "node scripts/miniapp-ci.js preview",
+    "upload": "node scripts/miniapp-ci.js upload",
+    "upload:function": "node scripts/miniapp-ci.js upload-function",
+    "status:function": "node scripts/cloud-function-status.js",
+    "check": "node --check scripts/miniapp-ci.js && node --check scripts/cloud-function-status.js && node --check miniprogram/pages/index/index.js && node --check cloudfunctions/quickstartFunctions/index.js"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "less": "3.13.1",
+    "miniprogram-ci": "^2.1.31"
+  }
+}

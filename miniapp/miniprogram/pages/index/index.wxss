@@ -1,0 +1,237 @@
+page {
+  background: #edf4ee;
+  color: #152a20;
+}
+
+.page {
+  min-height: 100vh;
+  padding: 44rpx 32rpx 64rpx;
+  box-sizing: border-box;
+  font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.hero {
+  padding: 30rpx 6rpx 18rpx;
+}
+
+.eyebrow {
+  color: #47715f;
+  font-size: 24rpx;
+  letter-spacing: 2rpx;
+}
+
+.title {
+  margin-top: 18rpx;
+  font-size: 50rpx;
+  font-weight: 700;
+  color: #132f24;
+}
+
+.subtitle {
+  margin-top: 18rpx;
+  color: #62746a;
+  font-size: 28rpx;
+  line-height: 1.65;
+}
+
+.chat-card,
+.card {
+  margin-top: 28rpx;
+  padding: 30rpx;
+  border: 1rpx solid rgba(33, 74, 53, 0.08);
+  border-radius: 24rpx;
+  background: #fbfffc;
+  box-shadow: 0 12rpx 32rpx rgba(32, 74, 52, 0.09);
+}
+
+.chat-title,
+.card-title {
+  margin-bottom: 22rpx;
+  color: #18372a;
+  font-size: 32rpx;
+  font-weight: 650;
+}
+
+.card-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18rpx;
+}
+
+.card-title-row .card-title {
+  margin-bottom: 0;
+}
+
+.inline-actions {
+  display: flex;
+  gap: 22rpx;
+  color: #2f6d51;
+  font-size: 26rpx;
+}
+
+.voice-panel {
+  padding: 26rpx;
+  border-radius: 22rpx;
+  background: #eef6f1;
+}
+
+.voice-panel.is-recording {
+  background: #fff3ee;
+}
+
+.voice-status {
+  color: #254a38;
+  font-size: 30rpx;
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.voice-strip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18rpx;
+  height: 104rpx;
+  margin-top: 24rpx;
+  border-radius: 999rpx;
+  background: #176f4e;
+  color: #fff;
+  box-shadow: inset 0 -5rpx 0 rgba(0, 0, 0, 0.12);
+}
+
+.is-recording .voice-strip {
+  background: #b34a34;
+}
+
+.voice-dot {
+  width: 20rpx;
+  height: 20rpx;
+  border-radius: 50%;
+  background: #fff;
+  opacity: 0.9;
+}
+
+.voice-label {
+  font-size: 34rpx;
+  font-weight: 700;
+  letter-spacing: 1rpx;
+}
+
+.voice-help,
+.voice-error {
+  margin-top: 18rpx;
+  font-size: 25rpx;
+  line-height: 1.55;
+}
+
+.voice-help {
+  color: #687d71;
+}
+
+.voice-error {
+  color: #a5422e;
+}
+
+.rule-input {
+  width: 100%;
+  min-height: 210rpx;
+  padding: 24rpx;
+  box-sizing: border-box;
+  border: 1rpx solid rgba(33, 74, 53, 0.08);
+  border-radius: 18rpx;
+  background: #f3f8f4;
+  color: #162c22;
+  font-size: 30rpx;
+  line-height: 1.55;
+}
+
+.secondary-button,
+.submit-button {
+  border-radius: 999rpx;
+  font-size: 30rpx;
+  font-weight: 650;
+}
+
+.secondary-button {
+  margin-top: 22rpx;
+  color: #1d4c39;
+  background: #dcebe2;
+}
+
+.submit-button {
+  margin-top: 28rpx;
+  color: #fff;
+  background: #173327;
+}
+
+.hint,
+.summary {
+  margin-top: 18rpx;
+  color: #66786e;
+  font-size: 26rpx;
+  line-height: 1.6;
+}
+
+.example {
+  margin-top: 16rpx;
+  padding: 22rpx;
+  border-radius: 18rpx;
+  background: #edf5f0;
+  color: #254839;
+  font-size: 27rpx;
+  line-height: 1.55;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16rpx;
+  margin-top: 24rpx;
+}
+
+.cell {
+  padding: 20rpx;
+  border-radius: 18rpx;
+  background: #edf5f0;
+}
+
+.cell text {
+  display: block;
+  color: #668073;
+  font-size: 24rpx;
+}
+
+.cell strong {
+  display: block;
+  margin-top: 8rpx;
+  color: #163126;
+  font-size: 30rpx;
+}
+
+.rules {
+  margin-top: 22rpx;
+}
+
+.rule-line {
+  padding: 10rpx 0;
+  color: #2b4c3d;
+  font-size: 27rpx;
+  line-height: 1.55;
+}
+
+.result-card {
+  margin-bottom: 30rpx;
+}
+
+.success {
+  color: #187a54;
+  font-size: 29rpx;
+  line-height: 1.6;
+}
+
+.error {
+  color: #a5422e;
+  font-size: 29rpx;
+  line-height: 1.6;
+}

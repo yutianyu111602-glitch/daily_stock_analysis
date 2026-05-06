@@ -1,0 +1,15 @@
+{
+  "pages": [
+    "pages/index/index"
+  ],
+  "window": {
+    "backgroundColor": "#EEF3EF",
+    "backgroundTextStyle": "light",
+    "navigationBarBackgroundColor": "#EEF3EF",
+    "navigationBarTitleText": "规则观察助手",
+    "navigationBarTextStyle": "black"
+  },
+  "sitemapLocation": "sitemap.json",
+  "style": "v2",
+  "lazyCodeLoading": "requiredComponents"
+}

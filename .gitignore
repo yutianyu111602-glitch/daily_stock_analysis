@@ -46,6 +46,13 @@ env/
 *.swo
 *~
 .cursorrules
+private.wx*.key
+miniapp/project.private.config.json
+miniapp/node_modules/
+miniapp/cloudfunctions/**/node_modules/
+miniapp/tmp/
+miniapp/*.zip
+miniapp/*.log
 
 # 数据和日志
 /data/

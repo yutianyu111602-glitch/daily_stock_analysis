@@ -1,0 +1,76 @@
+<view class="page">
+  <view class="hero">
+    <view class="eyebrow">家庭自用 · A股规则观察</view>
+    <view class="title">像发微信一样说规则</view>
+    <view class="subtitle">按住语音条，说完松手。系统先转文字，再整理成选股条件；确认后才提交筛选。</view>
+  </view>
+
+  <view class="chat-card">
+    <view class="chat-title">1. 说一句规则</view>
+    <view class="voice-panel {{recording ? 'is-recording' : ''}}">
+      <view class="voice-status">{{voiceStatus}}</view>
+      <view
+        class="voice-strip"
+        catchtouchstart="startRecord"
+        catchtouchend="stopRecord"
+        catchtouchcancel="cancelRecord"
+      >
+        <view class="voice-dot"></view>
+        <view class="voice-label">
+          {{recording ? "松手发送" : recognizing ? "正在识别..." : "按住说话"}}
+        </view>
+      </view>
+      <view class="voice-help">建议一次说 5-20 秒，例如：“量比大于1，换手大于3，行业前五，精选10只”。</view>
+      <view wx:if="{{voiceError}}" class="voice-error">{{voiceError}}</view>
+    </view>
+  </view>
+
+  <view class="card">
+    <view class="card-title-row">
+      <view class="card-title">2. 文字确认</view>
+      <view class="inline-actions">
+        <text bindtap="copyRuleText">复制</text>
+        <text bindtap="clearRule">清空</text>
+      </view>
+    </view>
+    <textarea
+      class="rule-input"
+      value="{{ruleText}}"
+      placeholder="语音识别结果会出现在这里。也可以直接打字修改。"
+      maxlength="500"
+      bindinput="onTextInput"
+    />
+    <button class="secondary-button" loading="{{parsing}}" bindtap="parseRule">理解这句话</button>
+    <view class="hint">这里可以改错字。系统只筛股票，不会自动下单。</view>
+  </view>
+
+  <view class="card">
+    <view class="card-title">不会说就点一句</view>
+    <view wx:for="{{examples}}" wx:key="*this" class="example" data-index="{{index}}" bindtap="useExample">
+      {{item}}
+    </view>
+  </view>
+
+  <view wx:if="{{parsed}}" class="card">
+    <view class="card-title">3. 系统理解</view>
+    <view wx:if="{{parsed.ok}}">
+      <view class="summary">{{parsed.summary}}</view>
+      <view class="grid">
+        <view class="cell"><text>展示数量</text><strong>{{parsed.profile.limit}}</strong></view>
+        <view class="cell"><text>场景</text><strong>{{parsed.sessionText}}</strong></view>
+        <view class="cell"><text>换手率</text><strong>{{parsed.profile.turnoverText}}</strong></view>
+        <view class="cell"><text>行业排名</text><strong>{{parsed.profile.sectorRankText}}</strong></view>
+      </view>
+      <view class="rules">
+        <view wx:for="{{parsed.lines}}" wx:key="*this" class="rule-line">{{item}}</view>
+      </view>
+      <button class="submit-button" loading="{{submitting}}" bindtap="submitRule">确认执行</button>
+    </view>
+    <view wx:else class="error">{{parsed.message}}</view>
+  </view>
+
+  <view wx:if="{{submitResult}}" class="card result-card">
+    <view class="card-title">4. 提交结果</view>
+    <view class="{{submitResult.ok ? 'success' : 'error'}}">{{submitResult.message}}</view>
+  </view>
+</view>
