@@ -60,6 +60,10 @@ class RuleScreenerWorkflowTestCase(unittest.TestCase):
         self.assertIn('RULE_SCREENER_FOCUS_POOL_LIMIT: "${{ vars.RULE_SCREENER_FOCUS_POOL_LIMIT || \'10\' }}"', workflow)
         self.assertIn('RULE_SCREENER_NL_RULE_TEXT: "${{ github.event.inputs.rule_text || \'\' }}"', workflow)
         self.assertIn('RULE_SCREENER_NL_SESSION: "${{ github.event.inputs.session || \'auto\' }}"', workflow)
+        self.assertIn(
+            'RULE_SCREENER_NL_LLM_MODEL: "${{ vars.RULE_SCREENER_NL_LLM_MODEL || \'deepseek/deepseek-v4-pro\' }}"',
+            workflow,
+        )
         self.assertIn('RULE_SCREENER_DEBUG_SECTOR: "${{ vars.RULE_SCREENER_DEBUG_SECTOR || \'true\' }}"', workflow)
         self.assertIn('RULE_SCREENER_DEBUG_REGIME: "${{ vars.RULE_SCREENER_DEBUG_REGIME || \'true\' }}"', workflow)
         self.assertIn("RULE_SCREENER_AUTO_RELAX_IF_EMPTY: ${{ vars.RULE_SCREENER_AUTO_RELAX_IF_EMPTY || 'true' }}", workflow)

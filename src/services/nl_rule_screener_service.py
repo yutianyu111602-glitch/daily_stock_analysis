@@ -189,7 +189,7 @@ def parse_natural_language_rule_with_llm(
         from src.agent.llm_adapter import LLMToolAdapter
 
         base_config = config or get_config()
-        forced_model = model or os.getenv("RULE_SCREENER_NL_LLM_MODEL", "deepseek/deepseek-chat").strip()
+        forced_model = model or os.getenv("RULE_SCREENER_NL_LLM_MODEL", "deepseek/deepseek-v4-pro").strip()
         try:
             llm_config = replace(base_config, agent_litellm_model=forced_model)
         except TypeError:

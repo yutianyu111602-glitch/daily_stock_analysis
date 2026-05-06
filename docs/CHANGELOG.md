@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] Docker 发布工作流收敛为更清晰的正式发布与手动补发链路，并统一官方 Docker Hub 镜像名为 `zhulinsen/daily_stock_analysis`
 - [文档] 补充官方镜像拉取、`docker run` 用法与 `.env` / 数据目录映射说明，不再仅覆盖 Compose 部署路径
 - [新功能] 新增 WSL2 WeChatBot 常驻网关，支持 OpenClaw/wechatbot 将微信文字或语音转文字后的自然语言规则转发到现有 bot 命令分发器
+- [改进] WSL2 WeChatBot 网关补充 Header token、用户白名单、消息长度限制和安全错误回包，并将规则选股自然语言解析默认模型切换到 DeepSeek V4 Pro
 
 ## [3.13.0] - 2026-04-21
 

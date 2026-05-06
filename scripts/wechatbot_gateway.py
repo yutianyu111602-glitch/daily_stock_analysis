@@ -35,6 +35,7 @@ RULE_HELP_TEXT = (
     "2. 直接说选股规则：例如“选股 量比大于1，换手大于3，行业前五，精选10只”\n"
     "3. 说上午/十点半会按 morning；说下午/两点半会按 afternoon；不说则 auto"
 )
+DEFAULT_MAX_CONTENT_CHARS = 1000
 
 
 class GatewayResponse(BaseModel):
@@ -85,6 +86,14 @@ def _extract_bool(data: Mapping[str, Any], *paths: str) -> bool:
     return value in {"1", "true", "yes", "y", "group", "chatroom"}
 
 
+def _extract_user_id(data: Mapping[str, Any]) -> str:
+    return _deep_get(data, "user_id", "sender", "from_user", "from", "wxid", "data.user_id") or "wechat-user"
+
+
+def _message_id(data: Mapping[str, Any]) -> str:
+    return _deep_get(data, "message_id", "msg_id", "id", "data.message_id") or str(uuid.uuid4())
+
+
 def _make_message(data: Mapping[str, Any]) -> Any:
     from bot.models import BotMessage, ChatType
 
@@ -92,11 +101,11 @@ def _make_message(data: Mapping[str, Any]) -> Any:
     if not content:
         raise HTTPException(status_code=400, detail="missing message content")
 
-    user_id = _deep_get(data, "user_id", "sender", "from_user", "from", "wxid", "data.user_id") or "wechat-user"
+    user_id = _extract_user_id(data)
     user_name = _deep_get(data, "user_name", "nickname", "sender_name", "data.user_name") or user_id
     chat_id = _deep_get(data, "chat_id", "room_id", "conversation_id", "data.chat_id") or user_id
     is_group = _extract_bool(data, "is_group", "group", "chat_type", "data.is_group") or chat_id.endswith("@chatroom")
-    message_id = _deep_get(data, "message_id", "msg_id", "id", "data.message_id") or str(uuid.uuid4())
+    message_id = _message_id(data)
 
     return BotMessage(
         platform="wechatbot",
@@ -162,6 +171,25 @@ def _check_token(expected_token: str, provided_token: Optional[str]) -> None:
         raise HTTPException(status_code=401, detail="invalid gateway token")
 
 
+def _check_allowed_user(user_id: str) -> None:
+    raw_allowed = os.getenv("WECHATBOT_ALLOWED_USER_IDS", "").strip()
+    if not raw_allowed:
+        return
+    allowed = {item.strip() for item in raw_allowed.split(",") if item.strip()}
+    if user_id not in allowed:
+        raise HTTPException(status_code=403, detail="user is not allowed")
+
+
+def _check_content_size(content: str) -> None:
+    max_chars_raw = os.getenv("WECHATBOT_GATEWAY_MAX_CONTENT_CHARS", str(DEFAULT_MAX_CONTENT_CHARS)).strip()
+    try:
+        max_chars = max(1, int(max_chars_raw))
+    except ValueError:
+        max_chars = DEFAULT_MAX_CONTENT_CHARS
+    if len(content) > max_chars:
+        raise HTTPException(status_code=413, detail="message content too long")
+
+
 def create_app() -> FastAPI:
     setup_env()
     app = FastAPI(title="Daily Stock Analysis WeChatBot Gateway")
@@ -185,17 +213,21 @@ def create_app() -> FastAPI:
         content = _extract_content(data)
         if not content:
             raise HTTPException(status_code=400, detail="missing message content")
-        message_id = _deep_get(data, "message_id", "msg_id", "id", "data.message_id") or str(uuid.uuid4())
+        content = content.strip()
+        _check_content_size(content)
+        user_id = _extract_user_id(data)
+        _check_allowed_user(user_id)
+        message_id = _message_id(data)
         mode = os.getenv("WECHATBOT_GATEWAY_MODE", "dispatcher").strip().lower()
-        if content.strip().lower() in {"help", "/help", "帮助", "?"}:
+        if content.lower() in {"help", "/help", "帮助", "?"}:
             return GatewayResponse(ok=True, reply=RULE_HELP_TEXT, markdown=False, message_id=message_id)
 
         if mode == "github_rules":
             try:
-                session = _run_github_rule_workflow(content.strip())
+                session = _run_github_rule_workflow(content)
             except Exception as exc:
-                logger.exception("[WeChatBotGateway] GitHub Actions trigger failed")
-                return GatewayResponse(ok=False, reply=str(exc), markdown=False, message_id=message_id)
+                logger.exception("[WeChatBotGateway] GitHub Actions trigger failed: %s", exc)
+                return GatewayResponse(ok=False, reply="规则选股任务提交失败，请查看网关日志。", markdown=False, message_id=message_id)
             return GatewayResponse(
                 ok=True,
                 reply=f"规则选股任务已提交到 GitHub Actions，session={session}。结果会走已配置的推送渠道。",
@@ -204,7 +236,7 @@ def create_app() -> FastAPI:
             )
 
         message = _make_message(data)
-        logger.info("[WeChatBotGateway] message user=%s content=%s", message.user_id, message.content[:80])
+        logger.info("[WeChatBotGateway] message user=%s chars=%s mode=%s", message.user_id, len(message.content), mode)
 
         response = await _dispatch_bot_message(message)
         return GatewayResponse(

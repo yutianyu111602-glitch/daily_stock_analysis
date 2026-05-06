@@ -134,6 +134,7 @@ jobs:
           RULE_SCREENER_FOCUS_POOL_LIMIT: "${{ vars.RULE_SCREENER_FOCUS_POOL_LIMIT || '10' }}"
           RULE_SCREENER_NL_RULE_TEXT: "${{ github.event.inputs.rule_text || '' }}"
           RULE_SCREENER_NL_SESSION: "${{ github.event.inputs.session || 'auto' }}"
+          RULE_SCREENER_NL_LLM_MODEL: "${{ vars.RULE_SCREENER_NL_LLM_MODEL || 'deepseek/deepseek-v4-pro' }}"
           RULE_SCREENER_DEBUG_SECTOR: "${{ vars.RULE_SCREENER_DEBUG_SECTOR || 'true' }}"
           RULE_SCREENER_DEBUG_REGIME: "${{ vars.RULE_SCREENER_DEBUG_REGIME || 'true' }}"
         run: |

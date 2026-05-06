@@ -135,6 +135,16 @@ class NaturalLanguageRuleParserTest(unittest.TestCase):
         self.assertIn("deepseek", profile.parser_source)
         adapter.call_with_tools.assert_called_once()
 
+    def test_llm_parser_defaults_to_deepseek_v4_pro(self) -> None:
+        fake_response = SimpleNamespace(content='{"limit": 10}', tool_calls=[])
+        config = SimpleNamespace(agent_litellm_model="", litellm_model="")
+
+        with patch("src.agent.llm_adapter.LLMToolAdapter") as adapter_cls:
+            adapter_cls.return_value.call_with_tools.return_value = fake_response
+            profile = parse_natural_language_rule_with_llm("帮我筛一下短线A股", config=config)
+
+        self.assertIn("deepseek/deepseek-v4-pro", profile.parser_source)
+
 
 if __name__ == "__main__":
     unittest.main()
