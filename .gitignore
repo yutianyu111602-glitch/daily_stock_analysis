@@ -37,6 +37,7 @@ venv/
 ENV/
 env/
 .venv/
+.venv-wsl/
 
 # IDE
 .idea/
