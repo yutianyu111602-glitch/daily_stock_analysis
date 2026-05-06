@@ -155,6 +155,33 @@ def test_github_rules_failure_hides_internal_error(monkeypatch) -> None:
     assert "查看网关日志" in body["reply"]
 
 
+def test_dedicated_stock_gateway_rejects_non_stock_message(monkeypatch) -> None:
+    monkeypatch.delenv("WECHATBOT_GATEWAY_TOKEN", raising=False)
+    monkeypatch.setenv("WECHATBOT_GATEWAY_REQUIRE_STOCK_INTENT", "true")
+    client = TestClient(create_app())
+
+    response = client.post("/wechatbot/message", json={"text": "今天天气怎么样", "from_user": "dad"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is False
+    assert "炒股专用网关" in body["reply"]
+
+
+def test_dedicated_stock_gateway_accepts_stock_code(monkeypatch) -> None:
+    monkeypatch.setenv("WECHATBOT_GATEWAY_MODE", "github_rules")
+    monkeypatch.setenv("WECHATBOT_GATEWAY_REQUIRE_STOCK_INTENT", "true")
+    monkeypatch.delenv("WECHATBOT_GATEWAY_TOKEN", raising=False)
+    completed = MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch.object(gateway.subprocess, "run", return_value=completed):
+        client = TestClient(create_app())
+        response = client.post("/wechatbot/message", json={"text": "分析 600875", "from_user": "dad"})
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+
+
 def test_message_rejects_missing_content(monkeypatch) -> None:
     monkeypatch.delenv("WECHATBOT_GATEWAY_TOKEN", raising=False)
     client = TestClient(create_app())

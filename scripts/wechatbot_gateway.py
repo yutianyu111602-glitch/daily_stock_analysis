@@ -36,6 +36,27 @@ RULE_HELP_TEXT = (
     "3. 说上午/十点半会按 morning；说下午/两点半会按 afternoon；不说则 auto"
 )
 DEFAULT_MAX_CONTENT_CHARS = 1000
+STOCK_INTENT_KEYWORDS = (
+    "股票",
+    "选股",
+    "筛选",
+    "筛股",
+    "规则",
+    "短线",
+    "a股",
+    "A股",
+    "大盘",
+    "板块",
+    "行业",
+    "量比",
+    "换手",
+    "乖离",
+    "均线",
+    "20日",
+    "十日",
+    "abc",
+    "ABC",
+)
 
 
 class GatewayResponse(BaseModel):
@@ -190,6 +211,17 @@ def _check_content_size(content: str) -> None:
         raise HTTPException(status_code=413, detail="message content too long")
 
 
+def _requires_stock_intent() -> bool:
+    return os.getenv("WECHATBOT_GATEWAY_REQUIRE_STOCK_INTENT", "true").strip().lower() not in {"0", "false", "no"}
+
+
+def _looks_like_stock_intent(content: str) -> bool:
+    text = content.strip()
+    if any(keyword in text for keyword in STOCK_INTENT_KEYWORDS):
+        return True
+    return bool(__import__("re").search(r"(?<!\d)(?:[036]\d{5}|[48]\d{5})(?!\d)", text))
+
+
 def create_app() -> FastAPI:
     setup_env()
     app = FastAPI(title="Daily Stock Analysis WeChatBot Gateway")
@@ -221,6 +253,13 @@ def create_app() -> FastAPI:
         mode = os.getenv("WECHATBOT_GATEWAY_MODE", "dispatcher").strip().lower()
         if content.lower() in {"help", "/help", "帮助", "?"}:
             return GatewayResponse(ok=True, reply=RULE_HELP_TEXT, markdown=False, message_id=message_id)
+        if _requires_stock_intent() and not _looks_like_stock_intent(content):
+            return GatewayResponse(
+                ok=False,
+                reply="这是炒股专用网关。请发送选股规则、股票代码或股票分析请求。",
+                markdown=False,
+                message_id=message_id,
+            )
 
         if mode == "github_rules":
             try:

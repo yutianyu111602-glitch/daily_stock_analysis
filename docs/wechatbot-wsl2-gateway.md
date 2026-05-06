@@ -13,6 +13,7 @@
 ```
 
 定时任务仍由 GitHub Actions 负责。这个网关只处理“你爸临时发消息询问或触发”的交互。
+这是炒股专用网关，默认 `WECHATBOT_GATEWAY_REQUIRE_STOCK_INTENT=true`，非股票相关消息不会触发 GitHub Actions。
 
 推荐你当前使用 `WECHATBOT_GATEWAY_MODE=github_rules`：微信临时规则直接触发 GitHub Actions，继续复用 GitHub Secrets、缓存和定时分析环境，WSL2 只负责收消息和提交任务。
 
@@ -139,6 +140,7 @@ Environment=WECHATBOT_GATEWAY_MODE=github_rules
 Environment=WECHATBOT_GATEWAY_GITHUB_REPO=yutianyu111602-glitch/daily_stock_analysis
 Environment=WECHATBOT_GATEWAY_GITHUB_AI_REVIEW=false
 Environment=WECHATBOT_GATEWAY_MAX_CONTENT_CHARS=1000
+Environment=WECHATBOT_GATEWAY_REQUIRE_STOCK_INTENT=true
 EnvironmentFile=-/home/pc/openclaw-secrets/dsa-wechatbot-gateway.env
 ExecStart=/mnt/c/code/githubstar/daily_stock_analysis/.venv-wsl/bin/python scripts/wechatbot_gateway.py
 Restart=always
