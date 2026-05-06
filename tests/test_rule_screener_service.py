@@ -540,6 +540,11 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         self.assertIn("## 优先关注（前 10 只）", report)
         self.assertIn("排序依据：行业涨幅排名、行业涨幅、当日涨幅、量比、换手率、ABC 结构质量、资金流向。", report)
         self.assertIn("样本股1 (300490)", report)
+        self.assertIn("## 技术候选池（共 12 只，展示前 10 只）", report)
+        self.assertIn("其余 2 只未在推送正文展开", report)
+        technical_section = report.split("## 技术候选池（共 12 只，展示前 10 只）", 1)[1]
+        self.assertNotIn("11. 样本股11 (300500)", technical_section)
+        self.assertNotIn("样本股12 (300501)\n   - 板块：", technical_section)
 
     def test_build_screening_report_adds_focus_section_even_when_candidate_count_is_under_limit(self) -> None:
         technical_candidates = []
@@ -583,6 +588,40 @@ class RuleScreenerServiceTestCase(unittest.TestCase):
         self.assertIn("平安银行 (000001)", report)
         self.assertIn("万向钱潮 (000559)", report)
         self.assertIn("华自科技 (300490)", report)
+
+    def test_build_screening_report_caps_total_displayed_candidates_to_ten(self) -> None:
+        full_hits = []
+        relaxed_hits = []
+        technical_pool = []
+        manual_pool = []
+        for idx in range(4):
+            full_hits.append(_build_candidate(f"{1 + idx:06d}", name=f"完整{idx + 1}", sector_name="银行"))
+        for idx in range(4):
+            relaxed_hits.append(_build_candidate(f"{300100 + idx}", name=f"放宽{idx + 1}", sector_name="汽车"))
+        for idx in range(4):
+            technical_pool.append(_build_candidate(f"{600100 + idx}", name=f"技术{idx + 1}", sector_name="电子"))
+        for idx in range(2):
+            manual_pool.append(_build_candidate(f"{2100 + idx:06d}", name=f"人工{idx + 1}", sector_name="机械"))
+
+        report = build_screening_report(
+            candidates=[],
+            report_date="2026-04-13",
+            grouped_candidates=RuleScreeningBuckets(
+                full_hits=full_hits,
+                relaxed_hits=relaxed_hits,
+                technical_pool=technical_pool,
+                manual_review_pool=manual_pool,
+            ),
+        )
+
+        self.assertIn("## 完整命中（4 只）", report)
+        self.assertIn("## 动态放宽命中（4 只）", report)
+        self.assertIn("## 技术候选池（共 4 只，展示前 2 只）", report)
+        self.assertNotIn("## 人工精选池", report)
+        technical_section = report.split("## 技术候选池（共 4 只，展示前 2 只）", 1)[1]
+        self.assertIn("技术1 (600100)", technical_section)
+        self.assertIn("技术2 (600101)", technical_section)
+        self.assertNotIn("技术3 (600102)\n   - 板块：", technical_section)
 
     def test_build_screening_report_renders_manual_review_pool(self) -> None:
         candidate = _build_candidate("600010", name="包钢股份", sector_name="钢铁", sector_change_pct=1.21)

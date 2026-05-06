@@ -1337,6 +1337,9 @@ def build_screening_report(
     dynamic_adjustments: Optional[Sequence[Union[DynamicAdjustment, str]]] = None,
     screening_buckets: Optional[RuleScreeningBuckets] = None,
 ) -> str:
+    report_candidate_limit = max(1, min(int(os.getenv("RULE_SCREENER_PUSH_CANDIDATE_LIMIT", "10")), 15))
+    displayed_candidate_total = 0
+
     def normalize_grouped_candidates(
         value: Optional[Union[RuleScreeningBuckets, Dict[str, Sequence[RuleScreeningCandidate]]]],
     ) -> RuleScreeningBuckets:
@@ -1362,16 +1365,25 @@ def build_screening_report(
         section_title: str,
         section_candidates: Sequence[RuleScreeningCandidate],
     ) -> None:
+        nonlocal displayed_candidate_total
         if not section_candidates:
             return
+        remaining_slots = max(report_candidate_limit - displayed_candidate_total, 0)
+        if remaining_slots <= 0:
+            return
+        displayed_candidates = list(section_candidates[:remaining_slots])
+        hidden_count = max(len(section_candidates) - len(displayed_candidates), 0)
+        section_heading = f"## {section_title}（{len(section_candidates)} 只）"
+        if hidden_count > 0:
+            section_heading = f"## {section_title}（共 {len(section_candidates)} 只，展示前 {len(displayed_candidates)} 只）"
 
         lines.extend(
             [
-                f"## {section_title}（{len(section_candidates)} 只）",
+                section_heading,
                 "",
             ]
         )
-        for idx, candidate in enumerate(section_candidates, start=1):
+        for idx, candidate in enumerate(displayed_candidates, start=1):
             candidate_lines = [
                 f"{idx}. {candidate.name} ({candidate.code})",
                 (
@@ -1397,6 +1409,9 @@ def build_screening_report(
                 candidate_lines.append(f"   - 未满足条件：{'；'.join(candidate.failed_conditions)}")
             candidate_lines.append(f"   - 规则说明：{'；'.join(candidate.notes)}")
             lines.extend(candidate_lines)
+        displayed_candidate_total += len(displayed_candidates)
+        if hidden_count > 0:
+            lines.append(f"- 其余 {hidden_count} 只未在推送正文展开，避免消息过长；可按优先关注顺序人工跟踪。")
         lines.append("")
 
     def append_focus_section(section_candidates: Sequence[RuleScreeningCandidate]) -> None:
